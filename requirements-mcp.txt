@@ -1,0 +1,7 @@
+# Опционально: если не используете `uvx` для MCP fetch/sqlite в .cursor/mcp.json
+# Установка: pip install -r requirements-mcp.txt
+# Тогда в mcp.json замените команды fetch/sqlite на:
+#   "command": "python", "args": ["-m", "mcp_server_fetch"]
+#   "command": "python", "args": ["-m", "mcp_server_sqlite", "--db-path", "${workspaceFolder}/.mcp_data/mcp.sqlite"]
+mcp-server-fetch>=0.6.3
+mcp-server-sqlite>=0.6.2

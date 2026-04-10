@@ -1,5 +1,13 @@
 .env
+secrets.env
 __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Локальные данные MCP (SQLite, knowledge graph memory)
+.mcp_data/
+
+# Локальные переопределения MCP (не коммитить URL/секреты)
+.cursor/mcp.local.json
+.vscode/mcp.local.json
