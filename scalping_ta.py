@@ -167,17 +167,6 @@ class ScalpingTAConservative(ScalpingTAOhlcv):
                 detail=f"TA cons: LONG у lower BB (|Δ|={abs(d_lower_bps):.1f}≤{near:.0f} bps), RSI={rsi:.1f}",
                 impulse_bps=float(imp),
             )
-        if rsi >= hi_th and abs(d_upper_bps) <= near:
-            imp = max(
-                impulse_bps_mid_to_ref(mid, mid_bb) or 0.0,
-                abs(d_upper_bps),
-                5.0,
-            )
-            return ScalpSignal(
-                side="sell",
-                detail=f"TA cons: SHORT у upper BB (|Δ|={abs(d_upper_bps):.1f}≤{near:.0f} bps), RSI={rsi:.1f}",
-                impulse_bps=float(imp),
-            )
         return None
 
     def on_quote(self, q: Quote, order_book: dict | None = None) -> ScalpSignal | None:
