@@ -22,6 +22,164 @@ _RISK_REJECT_LOG_THROTTLE_SEC = 15.0
 _CAPITAL_REJECT_LOG_THROTTLE_SEC = 15.0
 
 
+class _PaperAnalytics:
+    """Сессионная аналитика для paper-исполнения (по закрытым ордерам и отказам)."""
+
+    def __init__(self) -> None:
+        self.closed_orders = 0
+        self.closed_buy = 0
+        self.closed_sell = 0
+        self.realized_events = 0
+        self.realized_pos = 0
+        self.realized_neg = 0
+        self.realized_zero = 0
+        self.realized_quote = 0.0
+        self.fees_quote = 0.0
+        self.hold_seconds_sum = 0.0
+
+        self.reject_capital = 0
+        self.reject_capital_cooldown = 0
+        self.reject_risk = 0
+
+        # key=(exchange_id, symbol) → stats
+        self._by_key: dict[tuple[str, str], dict[str, float]] = {}
+
+    def on_reject_capital(self, reason: str) -> None:
+        self.reject_capital += 1
+        if str(reason).startswith("capital: cooldown"):
+            self.reject_capital_cooldown += 1
+
+    def on_reject_risk(self) -> None:
+        self.reject_risk += 1
+
+    def on_closed_order(
+        self,
+        order: dict[str, Any],
+        *,
+        realized_delta_quote: float,
+        fees_delta_quote: float,
+        closed_mono: float,
+    ) -> None:
+        exchange_id = str(order.get("exchange_id", ""))
+        symbol = str(order.get("symbol", ""))
+        side = str(order.get("side", "")).lower()
+        filled = float(order.get("filled") or 0.0)
+        cum_quote = float(order.get("cum_quote") or 0.0)
+
+        self.closed_orders += 1
+        if side == "buy":
+            self.closed_buy += 1
+        elif side == "sell":
+            self.closed_sell += 1
+
+        self.realized_quote += float(realized_delta_quote)
+        self.fees_quote += float(fees_delta_quote)
+
+        if abs(float(realized_delta_quote)) < 1e-12:
+            self.realized_zero += 1
+        else:
+            self.realized_events += 1
+            if realized_delta_quote > 0:
+                self.realized_pos += 1
+            else:
+                self.realized_neg += 1
+
+        created_mono = float(order.get("created_mono") or 0.0)
+        if created_mono > 0:
+            hold_s = max(0.0, float(closed_mono) - created_mono)
+            self.hold_seconds_sum += hold_s
+        else:
+            hold_s = 0.0
+
+        key = (exchange_id, symbol)
+        s = self._by_key.setdefault(
+            key,
+            {
+                "closed_orders": 0.0,
+                "closed_buy": 0.0,
+                "closed_sell": 0.0,
+                "realized_quote": 0.0,
+                "fees_quote": 0.0,
+                "hold_seconds_sum": 0.0,
+                "turnover_quote": 0.0,
+                "filled_base_sum": 0.0,
+            },
+        )
+        s["closed_orders"] += 1.0
+        if side == "buy":
+            s["closed_buy"] += 1.0
+        elif side == "sell":
+            s["closed_sell"] += 1.0
+        s["realized_quote"] += float(realized_delta_quote)
+        s["fees_quote"] += float(fees_delta_quote)
+        s["hold_seconds_sum"] += float(hold_s)
+        s["turnover_quote"] += float(cum_quote)
+        s["filled_base_sum"] += float(filled)
+
+    def report_lines(self) -> list[str]:
+        if self.closed_orders <= 0 and self.reject_capital <= 0 and self.reject_risk <= 0:
+            return []
+
+        avg_hold = self.hold_seconds_sum / self.closed_orders if self.closed_orders > 0 else 0.0
+        net = self.realized_quote - self.fees_quote
+        lines: list[str] = []
+        lines.append(
+            "paper-отчёт: закрыто ордеров=%d (buy=%d sell=%d) | реализ.Δ=%+.4f USDT | комиссииΔ=%+.4f | net≈%+.4f | avg hold≈%.1fs"
+            % (
+                int(self.closed_orders),
+                int(self.closed_buy),
+                int(self.closed_sell),
+                float(self.realized_quote),
+                float(self.fees_quote),
+                float(net),
+                float(avg_hold),
+            )
+        )
+        if self.reject_capital or self.reject_risk:
+            lines.append(
+                "paper-отчёт: отказы — capital=%d (cooldown=%d) | risk=%d"
+                % (int(self.reject_capital), int(self.reject_capital_cooldown), int(self.reject_risk))
+            )
+        if self.closed_orders > 0:
+            lines.append(
+                "paper-отчёт: realized events=%d (+%d/-%d, zero=%d)"
+                % (int(self.realized_events), int(self.realized_pos), int(self.realized_neg), int(self.realized_zero))
+            )
+
+        # Top symbols by turnover
+        rows: list[tuple[float, tuple[str, str], dict[str, float]]] = []
+        for k, v in self._by_key.items():
+            rows.append((float(v.get("turnover_quote") or 0.0), k, v))
+        rows.sort(key=lambda x: x[0], reverse=True)
+        if rows:
+            lines.append("paper-отчёт: по инструментам (turnover↓):")
+            for turnover, (ex, sym), v in rows[:12]:
+                co = int(v.get("closed_orders") or 0.0)
+                if co <= 0:
+                    continue
+                avgh = float(v.get("hold_seconds_sum") or 0.0) / co
+                r = float(v.get("realized_quote") or 0.0)
+                f = float(v.get("fees_quote") or 0.0)
+                net_k = r - f
+                # bps on turnover (rough)
+                bps = (net_k / turnover * 10_000.0) if turnover > 1e-12 else 0.0
+                lines.append(
+                    "  - %s %s: closed=%d (b=%d s=%d) net≈%+.4f USDT (≈%+.1f bps on turnover), fees≈%.4f, avg hold≈%.1fs"
+                    % (
+                        ex,
+                        sym,
+                        co,
+                        int(v.get("closed_buy") or 0.0),
+                        int(v.get("closed_sell") or 0.0),
+                        net_k,
+                        bps,
+                        f,
+                        avgh,
+                    )
+                )
+        return lines
+
+
 class OrderExecutor:
     """Выставление и снятие лимитных ордеров с проверкой RiskManager."""
 
@@ -36,9 +194,46 @@ class OrderExecutor:
         self._capital = capital if capital is not None else CapitalGuard.from_settings(settings)
         self._clients: dict[str, ccxt.Exchange] = {}
         self._paper_orders: dict[str, dict[str, Any]] = {}
-        self._paper_pnl = PaperSessionPnl(settings.fee_bps_per_side)
+        self._paper_pnl = PaperSessionPnl(settings.paper_trading_fee_bps())
+        self._paper_analytics = _PaperAnalytics() if settings.paper else None
         self._last_risk_reject_log_mono: float = 0.0
         self._last_capital_reject_log_mono: float = 0.0
+
+    def _paper_on_closed_order(self, order: dict[str, Any], closed_mono: float) -> None:
+        if not self._s.paper or self._paper_analytics is None:
+            return
+        # delta по PnL и комиссиям считаем относительно PaperSessionPnl (они обновляются в try_record_closed_order)
+        before_r = float(self._paper_pnl.realized_pnl_quote)
+        before_f = float(self._paper_pnl.fees_paid_quote)
+        dpnl_sell = self._paper_pnl.try_record_closed_order(order)
+        after_r = float(self._paper_pnl.realized_pnl_quote)
+        after_f = float(self._paper_pnl.fees_paid_quote)
+        realized_delta = after_r - before_r
+        fees_delta = after_f - before_f
+
+        self._paper_analytics.on_closed_order(
+            order,
+            realized_delta_quote=realized_delta,
+            fees_delta_quote=fees_delta,
+            closed_mono=closed_mono,
+        )
+
+        # Поведение как раньше: капитал и спец-лог только по sell (dpnl_sell!=None)
+        if dpnl_sell is not None:
+            self._capital.on_sell_realized_delta(dpnl_sell, now_mono=closed_mono)
+            self._log_paper_sell_realized(dpnl_sell)
+
+    def _log_paper_sell_realized(self, dpnl: float) -> None:
+        """Sell в paper: Δ=0 нормален при открытии short (нет long для закрытия)."""
+        sess = float(self._paper_pnl.realized_pnl_quote)
+        if abs(float(dpnl)) < 1e-12:
+            log.info(
+                "paper PnL: sell — реализ. прирост ≈ 0 (открыт/добавлен short; PnL при buy покрытия); "
+                "сессия ≈ %.4f USDT",
+                sess,
+            )
+        else:
+            log.info("paper PnL: по продаже ≈ %.4f USDT (сессия ≈ %.4f USDT)", float(dpnl), sess)
 
     def update_open_notional_for_order(self, order_id: str, remaining: float, price: float) -> None:
         """Синхронизировать риск с биржей: остаток лимитки в базе × цена (GTC)."""
@@ -153,6 +348,12 @@ class OrderExecutor:
             return None
         return self._paper_pnl.summary_line()
 
+    def paper_totals_banner_lines(self) -> list[str]:
+        """Paper: многострочный итог — сколько бот набрал реализованного PnL за сессию (всегда есть строки)."""
+        if not self._s.paper:
+            return []
+        return self._paper_pnl.totals_banner_lines()
+
     def paper_pnl_running_line(self) -> str | None:
         """Краткая строка для пульса paper: реализованный PnL и счётчики (даже если сделок ещё не было)."""
         if not self._s.paper:
@@ -254,14 +455,8 @@ class OrderExecutor:
                 status,
             )
             if status == "closed":
-                dpnl = self._paper_pnl.try_record_closed_order(o)
-                if dpnl is not None:
-                    self._capital.on_sell_realized_delta(dpnl, now_mono=time.monotonic())
-                    log.info(
-                        "paper PnL: по продаже ≈ %.4f USDT (сессия ≈ %.4f USDT)",
-                        dpnl,
-                        self._paper_pnl.realized_pnl_quote,
-                    )
+                now_mono = time.monotonic()
+                self._paper_on_closed_order(o, now_mono)
             updated.append(o)
         return updated
 
@@ -319,6 +514,8 @@ class OrderExecutor:
                 paper=self._s.paper,
             )
             if not ok_c:
+                if self._paper_analytics is not None:
+                    self._paper_analytics.on_reject_capital(str(cap_reason))
                 now = time.monotonic()
                 if now - self._last_capital_reject_log_mono >= _CAPITAL_REJECT_LOG_THROTTLE_SEC:
                     self._last_capital_reject_log_mono = now
@@ -333,6 +530,8 @@ class OrderExecutor:
 
         can_open = self._risk.can_open_exit(notional) if str(risk_priority) == "exit" else self._risk.can_open(notional)
         if not can_open:
+            if self._paper_analytics is not None:
+                self._paper_analytics.on_reject_risk()
             now = time.monotonic()
             extra = ""
             if self._s.strategy == "scalping" and self._s.auto_trade:
@@ -447,14 +646,7 @@ class OrderExecutor:
             }
             self._paper_store(order)
             if str(order.get("status", "")).lower() == "closed":
-                dpnl = self._paper_pnl.try_record_closed_order(order)
-                if dpnl is not None:
-                    self._capital.on_sell_realized_delta(dpnl, now_mono=time.monotonic())
-                    log.info(
-                        "paper PnL: по продаже ≈ %.4f USDT (сессия ≈ %.4f USDT)",
-                        dpnl,
-                        self._paper_pnl.realized_pnl_quote,
-                    )
+                self._paper_on_closed_order(order, time.monotonic())
             return order
 
         ex = await self._client(exchange_id)
@@ -492,3 +684,16 @@ class OrderExecutor:
         self._paper_orders.clear()
         self._paper_pnl.reset()
         self._capital.reset()
+
+    def paper_session_report_lines(self) -> list[str] | None:
+        """Многострочный отчёт (paper). None — если нечего печатать."""
+        if not self._s.paper or self._paper_analytics is None:
+            return None
+        lines = self._paper_analytics.report_lines()
+        return lines or None
+
+    def paper_open_positions(self) -> list[tuple[str, str, float, float]] | None:
+        """Paper: список открытых позиций по ногам (exchange_id, symbol, pos_base, entry_vwap)."""
+        if not self._s.paper:
+            return None
+        return self._paper_pnl.open_positions()

@@ -14,6 +14,7 @@ from scalping import (
     ScalpingMomentum,
     ScalpingRotate,
 )
+from scalping_orderflow import OrderflowTapeStore, ScalpingOrderflow
 from scalping_ta import (
     ScalpingTAAggressive,
     ScalpingTAConservative,
@@ -22,7 +23,12 @@ from scalping_ta import (
 )
 
 
-def engine_by_variant(settings: Settings, variant: str) -> Any:
+def engine_by_variant(
+    settings: Settings,
+    variant: str,
+    *,
+    orderflow_tape_store: OrderflowTapeStore | None = None,
+) -> Any:
     """Один именованный под-вариант (momentum, ta_regime, mean_reversion, …)."""
     v = variant.strip().lower()
     if v == "ta_regime":
@@ -33,6 +39,8 @@ def engine_by_variant(settings: Settings, variant: str) -> Any:
         return ScalpingTAAggressive(settings)
     if v == "ta_trend":
         return ScalpingTATrend(settings)
+    if v == "orderflow":
+        return ScalpingOrderflow(settings=settings, tape_store=orderflow_tape_store)
     if v == "mean_reversion":
         return ScalpingMeanReversion(
             deviation_bps=settings.scalping_reversion_deviation_bps,
@@ -54,17 +62,27 @@ def engine_by_variant(settings: Settings, variant: str) -> Any:
     )
 
 
-def make_scalping_engine(settings: Settings) -> Any:
+def make_scalping_engine(
+    settings: Settings,
+    *,
+    orderflow_tape_store: OrderflowTapeStore | None = None,
+) -> Any:
     """Движок по `settings.scalping_variant`: простой, rotate, ta_rotate или adaptive."""
     if settings.scalping_variant == "rotate":
-        engines = [engine_by_variant(settings, name) for name in settings.scalping_rotate_variants]
+        engines = [
+            engine_by_variant(settings, name, orderflow_tape_store=orderflow_tape_store)
+            for name in settings.scalping_rotate_variants
+        ]
         return ScalpingRotate(
             engines=engines,
             labels=list(settings.scalping_rotate_variants),
             interval_sec=settings.scalping_rotate_interval_seconds,
         )
     if settings.scalping_variant == "ta_rotate":
-        engines = [engine_by_variant(settings, name) for name in settings.scalping_ta_rotate_variants]
+        engines = [
+            engine_by_variant(settings, name, orderflow_tape_store=orderflow_tape_store)
+            for name in settings.scalping_ta_rotate_variants
+        ]
         return ScalpingRotate(
             engines=engines,
             labels=list(settings.scalping_ta_rotate_variants),
@@ -72,9 +90,9 @@ def make_scalping_engine(settings: Settings) -> Any:
         )
     if settings.scalping_variant == "adaptive":
         return ScalpingAdaptive(
-            momentum=engine_by_variant(settings, "momentum"),
-            filtered=engine_by_variant(settings, "filtered_momentum"),
-            mean_rev=engine_by_variant(settings, "mean_reversion"),
+            momentum=engine_by_variant(settings, "momentum", orderflow_tape_store=orderflow_tape_store),
+            filtered=engine_by_variant(settings, "filtered_momentum", orderflow_tape_store=orderflow_tape_store),
+            mean_rev=engine_by_variant(settings, "mean_reversion", orderflow_tape_store=orderflow_tape_store),
             vol_window=settings.scalping_vol_window,
             depth_levels=settings.scalping_adaptive_depth_levels,
             depth_thin=settings.scalping_adaptive_depth_thin,
@@ -82,16 +100,25 @@ def make_scalping_engine(settings: Settings) -> Any:
             vol_low_bps=settings.scalping_adaptive_vol_low_bps,
             vol_high_bps=settings.scalping_adaptive_vol_high_bps,
         )
-    return engine_by_variant(settings, settings.scalping_variant)
+    return engine_by_variant(settings, settings.scalping_variant, orderflow_tape_store=orderflow_tape_store)
 
 
 class ScalpingEngineFactory:
     """ОО-обёртка над функциями фабрики (удобно для тестов и расширения)."""
 
     @staticmethod
-    def from_variant(settings: Settings, variant: str) -> Any:
-        return engine_by_variant(settings, variant)
+    def from_variant(
+        settings: Settings,
+        variant: str,
+        *,
+        orderflow_tape_store: OrderflowTapeStore | None = None,
+    ) -> Any:
+        return engine_by_variant(settings, variant, orderflow_tape_store=orderflow_tape_store)
 
     @staticmethod
-    def from_settings(settings: Settings) -> Any:
-        return make_scalping_engine(settings)
+    def from_settings(
+        settings: Settings,
+        *,
+        orderflow_tape_store: OrderflowTapeStore | None = None,
+    ) -> Any:
+        return make_scalping_engine(settings, orderflow_tape_store=orderflow_tape_store)

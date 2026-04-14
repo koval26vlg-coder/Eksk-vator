@@ -129,6 +129,51 @@ class PaperSessionPnl:
             f"закрыто ордеров buy/sell: {self.closed_buys}/{self.closed_sells}{tail}"
         )
 
+    def totals_banner_lines(self) -> list[str]:
+        """Краткий итог сессии для лога: реализованный PnL по всем закрытым сделкам с момента старта."""
+        lines = [
+            "========== PAPER: итог сессии ==========",
+            f"Реализованный PnL (все закрытые сделки с начала запуска) ≈ {self.realized_pnl_quote:+.4f} USDT",
+            f"Комиссии (оценка, все стороны) ≈ {self.fees_paid_quote:.4f} USDT",
+            f"Закрыто ордеров buy / sell: {self.closed_buys} / {self.closed_sells}",
+        ]
+        if self.closed_buys == 0 and self.closed_sells == 0:
+            lines.append(
+                "Закрытых ордеров не было — реализованный PnL остаётся 0 (лимитки в paper могли не исполниться)."
+            )
+        inv: list[str] = []
+        for (ex, sym), dq in self._long.items():
+            b = sum(lb for lb, _ in dq)
+            if b > 1e-12:
+                inv.append(f"{sym}@{ex} long≈{b:.6f} base")
+        for (ex, sym), dq in self._short.items():
+            b = sum(lb for lb, _ in dq)
+            if b > 1e-12:
+                inv.append(f"{sym}@{ex} short≈{b:.6f} base")
+        if inv:
+            lines.append("Незакрытый инвентарь (оценка нереализ. — в Unrealized-отчёте выше): " + "; ".join(inv))
+        lines.append(
+            "Справка: «реализованный» — только по исполненным закрытиям; открытые позиции в итог не входят."
+        )
+        return lines
+
+    def open_positions(self) -> list[tuple[str, str, float, float]]:
+        """Открытые позиции по ногам (биржа+символ): (exchange_id, symbol, pos_base, entry_vwap).
+
+        pos_base>0 — long; pos_base<0 — short. entry_vwap в quote за 1 base (включая комиссию входа).
+        """
+        keys: set[tuple[str, str]] = set()
+        keys.update(self._long.keys())
+        keys.update(self._short.keys())
+
+        out: list[tuple[str, str, float, float]] = []
+        for ex, sym in sorted(keys):
+            pos, entry = self.position_entry_vwap(ex, sym)
+            if abs(float(pos)) <= 1e-12 or entry is None or float(entry) <= 0:
+                continue
+            out.append((str(ex), str(sym), float(pos), float(entry)))
+        return out
+
     def net_position_base(self, exchange_id: str, symbol: str) -> float:
         """Текущий net-инвентарь по базе (base): long>0, short<0."""
         key = (exchange_id, symbol)

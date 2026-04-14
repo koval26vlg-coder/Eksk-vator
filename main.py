@@ -17,6 +17,7 @@ from execution_bootstrap import build_trading_execution
 from execution import OrderExecutor
 from scalping import ScalpSignalLogDeduper, ScalpingFilteredMomentum
 from scalping_factory import make_scalping_engine
+from scalping_orderflow import OrderflowTapeStore
 from orderbook import format_spread_bid_ask, spread_bps
 from scanner import ArbitrageScanner
 from ws_stream import run_arbitrage_ws, run_scalping_ws
@@ -76,6 +77,24 @@ def _scalping_uses_ta(settings: Settings) -> bool:
     return settings.scalping_variant.startswith("ta_")
 
 
+def _settings_need_orderflow_store(settings: Settings) -> bool:
+    """Нужен буфер ленты (и движок orderflow), если вариант или шаг ротации — orderflow."""
+    if settings.scalping_variant == "orderflow":
+        return True
+    if settings.scalping_variant == "rotate" and "orderflow" in settings.scalping_rotate_variants:
+        return True
+    if settings.scalping_variant == "ta_rotate" and "orderflow" in settings.scalping_ta_rotate_variants:
+        return True
+    return False
+
+
+def _settings_need_scalping_order_book(settings: Settings) -> bool:
+    """Глубина стакана для auto_trade/adaptive или для под-варианта orderflow (в т.ч. в ротации)."""
+    if settings.auto_trade or settings.scalping_variant == "adaptive":
+        return True
+    return _settings_need_orderflow_store(settings)
+
+
 def _rest_filtered_diag(settings: Settings, engine: object, exchange_id: str, sym: str) -> str | None:
     key = (exchange_id, sym)
     if settings.scalping_variant != "filtered_momentum":
@@ -115,7 +134,7 @@ async def run_scalping_loop(
                 if scalp_trader:
                     scalp_trader.note_quote_for_vol_scale(exchange_id, q)
                 ob = None
-                need_book = settings.auto_trade or settings.scalping_variant == "adaptive"
+                need_book = _settings_need_scalping_order_book(settings)
                 if need_book:
                     ob = await scanner.fetch_order_book(exchange_id, sym, settings.orderbook_limit)
                 if settings.auto_trade and scalp_trader and ob:
@@ -156,9 +175,16 @@ async def run_loop() -> None:
     log = logging.getLogger("arbitrage")
     _, executor = build_trading_execution(settings)
 
+    orderflow_tape: OrderflowTapeStore | None = None
+    if settings.strategy == "scalping" and _settings_need_orderflow_store(settings):
+        orderflow_tape = OrderflowTapeStore(
+            window_seconds=settings.orderflow_tape_window_seconds,
+            max_events=settings.orderflow_tape_max_events,
+        )
+
     scalp_engine: object | None = None
     if settings.strategy == "scalping":
-        scalp_engine = make_scalping_engine(settings)
+        scalp_engine = make_scalping_engine(settings, orderflow_tape_store=orderflow_tape)
     atr_prov = _atr_bps_provider_from_engine(scalp_engine) if scalp_engine is not None else None
     scalp_trader = (
         ScalpAutoTrader(settings, executor, log, atr_bps_provider=atr_prov)
@@ -177,6 +203,12 @@ async def run_loop() -> None:
         settings.poll_seconds,
         settings.paper,
     )
+    if settings.paper and settings.paper_fee_bps_per_side is not None:
+        log.info(
+            "Paper: PnL лимиток — комиссия стороны %.2f bps (PAPER_FEE_BPS_PER_SIDE); ARBITRAGE_FEE_BPS_PER_SIDE=%.2f — для live/арбитража",
+            settings.paper_trading_fee_bps(),
+            settings.fee_bps_per_side,
+        )
     if settings.strategy == "scalping" and len(settings.exchanges) > 1:
         log.info(
             "Скальпинг: несколько бирж (%s) — отдельный WS на каждую; в paper ключи не нужны",
@@ -219,6 +251,14 @@ async def run_loop() -> None:
             log.info(
                 "AUTO_TRADE: reduce-only (%s)",
                 "глобально по паре (все биржи)" if settings.auto_trade_reduce_only_scope == "symbol" else "по бирже+паре",
+            )
+        if settings.auto_trade_max_hold_seconds > 0:
+            log.info(
+                "AUTO_TRADE: MAX_HOLD=%.0fs; min net pnl для таймера — long≥%.1f bps, short≥%.1f bps (0=выкл.); HARD=%.0fs",
+                settings.auto_trade_max_hold_seconds,
+                settings.auto_trade_max_hold_min_pnl_bps_long,
+                settings.auto_trade_max_hold_min_pnl_bps_short,
+                settings.auto_trade_max_hold_hard_seconds,
             )
     if settings.auto_trade and settings.strategy == "scalping":
         streams = len(settings.exchanges) * len(settings.symbols)
@@ -283,12 +323,22 @@ async def run_loop() -> None:
                 ", ".join(settings.scalping_rotate_variants),
                 settings.scalping_rotate_interval_seconds,
             )
+            if "orderflow" in settings.scalping_rotate_variants:
+                log.info(
+                    "Шаг orderflow: см. ORDERFLOW_* (.env.example); лента WS при ORDERFLOW_WS_COLLECT=true"
+                )
         elif settings.scalping_variant == "ta_rotate":
             log.info(
                 "Скальпинг ta_rotate: по кругу [%s], смена каждые %.0f с (SCALPING_ROTATE_INTERVAL_SECONDS; TA_* общие для всех шагов)",
                 ", ".join(settings.scalping_ta_rotate_variants),
                 settings.scalping_rotate_interval_seconds,
             )
+            if "orderflow" in settings.scalping_ta_rotate_variants:
+                log.info(
+                    "Шаг orderflow: лента (WS, ORDERFLOW_WS_COLLECT=%s) + верх стакана; режим сигнала=%s; см. ORDERFLOW_* в .env.example",
+                    settings.orderflow_ws_collect,
+                    settings.orderflow_signal_mode,
+                )
         elif settings.scalping_variant == "adaptive":
             log.info(
                 "Скальпинг adaptive: σ-тики окно=%s, глубина верх.%s уровней thin<%.0f thick>%.0f quote, vol low<%.1f high>%.1f bps",
@@ -324,6 +374,14 @@ async def run_loop() -> None:
                 settings.scalping_max_spread_bps,
                 settings.scalping_max_slippage_bps,
                 settings.scalping_cancel_previous_orders,
+            )
+        elif settings.scalping_variant == "orderflow":
+            log.info(
+                "Скальпинг orderflow: окно ленты %.1fs, книга top %s ур., сигнал=%s; WS-лента %s",
+                settings.orderflow_tape_window_seconds,
+                settings.orderflow_book_levels,
+                settings.orderflow_signal_mode,
+                "вкл." if settings.orderflow_ws_collect else "выкл. (только стакан)",
             )
         elif settings.scalping_variant.startswith("ta_"):
             log.info(
@@ -410,11 +468,17 @@ async def run_loop() -> None:
                     ta_scanner = ArbitrageScanner(settings)
                 try:
                     await run_scalping_ws(
-                        settings, log, scalp_engine, scalp_trader, executor, scanner=ta_scanner
+                        settings,
+                        log,
+                        scalp_engine,
+                        scalp_trader,
+                        executor,
+                        scanner=ta_scanner,
+                        orderflow_tape_store=orderflow_tape,
                     )
                 finally:
                     if ta_scanner is not None:
-                        await ta_scanner.close()
+                        await asyncio.shield(ta_scanner.close())
             else:
                 await run_arbitrage_ws(settings, log, arb_trader)
             return
@@ -434,7 +498,20 @@ async def run_loop() -> None:
             pnl_line = executor.paper_session_pnl_summary()
             if pnl_line:
                 log.info("Paper-сессия: %s", pnl_line)
-        await executor.close()
+            rep = executor.paper_session_report_lines()
+            if rep:
+                log.info("Paper-отчёт:\n%s", "\n".join(rep))
+            if scalp_trader and settings.strategy == "scalping" and settings.auto_trade:
+                arep = scalp_trader.paper_session_report_lines()
+                if arep:
+                    log.info("AutoTrade-отчёт:\n%s", "\n".join(arep))
+                urep = scalp_trader.paper_unrealized_report_lines()
+                if urep:
+                    log.info("Unrealized-отчёт:\n%s", "\n".join(urep))
+            totals = executor.paper_totals_banner_lines()
+            if totals:
+                log.info("%s", "\n".join(totals))
+        await asyncio.shield(executor.close())
 
 
 def main() -> None:

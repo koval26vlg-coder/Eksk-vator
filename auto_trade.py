@@ -25,6 +25,48 @@ from scanner import Opportunity, Quote
 log = logging.getLogger(__name__)
 
 
+class _AutoTradeAnalytics:
+    """Простая сессионная аналитика причин пропусков/блокировок в auto_trade."""
+
+    def __init__(self) -> None:
+        self._counts: dict[str, int] = {}
+        self._by_symbol: dict[tuple[str, str], dict[str, int]] = {}
+
+    def inc(self, reason: str, exchange_id: str, symbol: str) -> None:
+        r = str(reason)
+        self._counts[r] = int(self._counts.get(r, 0)) + 1
+        k = (str(exchange_id), str(symbol))
+        m = self._by_symbol.setdefault(k, {})
+        m[r] = int(m.get(r, 0)) + 1
+
+    def report_lines(self, *, top_reasons: int = 12, top_symbols: int = 12) -> list[str]:
+        if not self._counts:
+            return []
+
+        lines: list[str] = []
+        total = sum(self._counts.values())
+        lines.append(f"auto_trade-отчёт: skip/block events={total}")
+
+        reasons = sorted(self._counts.items(), key=lambda kv: kv[1], reverse=True)
+        lines.append("auto_trade-отчёт: топ причин (count↓):")
+        for r, c in reasons[: max(1, int(top_reasons))]:
+            lines.append(f"  - {r}: {int(c)}")
+
+        # Top symbols by total events
+        sym_rows: list[tuple[int, tuple[str, str], dict[str, int]]] = []
+        for k, m in self._by_symbol.items():
+            sym_rows.append((sum(m.values()), k, m))
+        sym_rows.sort(key=lambda x: x[0], reverse=True)
+        if sym_rows:
+            lines.append("auto_trade-отчёт: топ инструментов по числу событий (count↓):")
+            for cnt, (ex, sym), m in sym_rows[: max(1, int(top_symbols))]:
+                top = sorted(m.items(), key=lambda kv: kv[1], reverse=True)[:3]
+                tail = ", ".join(f"{r}={c}" for r, c in top)
+                lines.append(f"  - {ex} {sym}: {int(cnt)} ({tail})")
+
+        return lines
+
+
 class ScalpAutoTrader:
     """Лимитка у bid/ask; при наличии стакана — проверка глубины и проскальзывания (симуляция съедания книги)."""
 
@@ -60,8 +102,101 @@ class ScalpAutoTrader:
         # Quiet-market guard: окно mid по ноге (биржа+символ), чтобы отсекать «тихий» рынок.
         # key=(exchange_id, symbol) -> deque[(mono_ts, mid)]
         self._mid_window: dict[tuple[str, str], deque[tuple[float, float]]] = {}
+        # Последний mid по ноге для отчёта unrealized в конце сессии (обновляется при любом стакане/тике).
+        self._last_mid: dict[tuple[str, str], float] = {}
         # Чтобы не спамить "quiet guard" на каждом сигнале.
         self._quiet_skip_log_mono: dict[tuple[str, str], float] = {}
+        self._ana = _AutoTradeAnalytics() if bool(getattr(settings, "paper", False)) else None
+
+    def paper_session_report_lines(self) -> list[str] | None:
+        """Многострочная аналитика причин пропусков (paper)."""
+        if not self._s.paper or self._ana is None:
+            return None
+        out = self._ana.report_lines()
+        return out or None
+
+    def paper_unrealized_report_lines(self) -> list[str] | None:
+        """Paper: unrealized PnL по открытому инвентарю на момент остановки."""
+        if not self._s.paper:
+            return None
+        pos_list = self._ex.paper_open_positions() or []
+        if not pos_list:
+            return None
+
+        fee_side_bps = float(self._s.paper_trading_fee_bps())
+        lines: list[str] = []
+        total_raw = 0.0
+        total_net = 0.0
+        missing_mid = 0
+
+        rows: list[tuple[float, str]] = []
+        for ex, sym, pos, entry in pos_list:
+            mid = float(self._last_mid.get((ex, sym), 0.0) or 0.0)
+            if mid <= 0:
+                missing_mid += 1
+                continue
+
+            qty = abs(float(pos))
+            if qty <= 1e-12:
+                continue
+
+            if pos > 0:
+                pnl_bps = (mid / entry - 1.0) * 10_000.0
+                pnl_quote_raw = qty * (mid - entry)
+                side = "long"
+            else:
+                pnl_bps = (entry / mid - 1.0) * 10_000.0
+                pnl_quote_raw = qty * (entry - mid)
+                side = "short"
+
+            notional = qty * mid
+            exit_fee = notional * fee_side_bps / 10_000.0
+            pnl_quote_net = pnl_quote_raw - exit_fee
+            pnl_net_bps = pnl_bps - fee_side_bps
+
+            total_raw += pnl_quote_raw
+            total_net += pnl_quote_net
+
+            rows.append(
+                (
+                    pnl_quote_net,
+                    "  - %s %s %s pos≈%.8g entry≈%.8g mid≈%.8g unreal≈%+.4f USDT (net≈%+.4f, ≈%+.1f bps net)"
+                    % (
+                        ex,
+                        sym,
+                        side,
+                        pos,
+                        entry,
+                        mid,
+                        pnl_quote_raw,
+                        pnl_quote_net,
+                        pnl_net_bps,
+                    ),
+                )
+            )
+
+        if not rows and missing_mid:
+            return [f"unrealized-отчёт: позиции={len(pos_list)}, но нет mid для {missing_mid} ног(и)"]
+
+        rows.sort(key=lambda x: x[0])  # худшие сверху
+        lines.append(
+            "unrealized-отчёт: позиций=%d | unreal raw≈%+.4f USDT | exit fees≈%.4f | unreal net≈%+.4f"
+            % (
+                len(pos_list),
+                float(total_raw),
+                float(total_raw - total_net),
+                float(total_net),
+            )
+        )
+        if missing_mid:
+            lines.append(f"unrealized-отчёт: нет mid для {missing_mid} ног(и) — пропущены из расчёта")
+        lines.append("unrealized-отчёт: по позициям (net↑ хуже→лучше):")
+        lines.extend([s for (_p, s) in rows[:20]])
+        return lines
+
+    def _ana_inc(self, reason: str, exchange_id: str, symbol: str) -> None:
+        if self._ana is not None:
+            self._ana.inc(reason, exchange_id, symbol)
 
     def _quiet_skip_log_ok(self, exchange_id: str, symbol: str, now_mono: float, *, throttle_s: float = 30.0) -> bool:
         key = (str(exchange_id), str(symbol))
@@ -74,13 +209,14 @@ class ScalpAutoTrader:
     def _record_mid(self, exchange_id: str, symbol: str, mid: float, now_mono: float) -> None:
         if mid <= 0:
             return
+        key = (str(exchange_id), str(symbol))
+        self._last_mid[key] = float(mid)
         thr_bps = float(getattr(self._s, "scalping_min_mid_range_bps", 0.0) or 0.0)
         if thr_bps <= 0:
             return
         win_s = float(getattr(self._s, "scalping_min_mid_range_window_seconds", 30.0) or 30.0)
         if win_s <= 0:
             return
-        key = (str(exchange_id), str(symbol))
         dq = self._mid_window.get(key)
         if dq is None:
             dq = deque()
@@ -109,18 +245,18 @@ class ScalpAutoTrader:
         # На всякий случай подчистим старое (если тик был без стакана).
         while dq and dq[0][0] < cutoff:
             dq.popleft()
-        min_samples = int(getattr(self._s, "scalping_min_mid_range_min_samples", 0) or 0)
-        if min_samples > 0 and len(dq) < min_samples:
-            # Warmup: пока окно не наполнено — трактуем как "guard активен, но данных мало".
-            # Возвращаем 0, чтобы вход был пропущен выше по условию rng < thr_range.
-            return 0.0
         if len(dq) < 2:
+            return None
+        # Нужна «зрелость» окна по времени: иначе min/max по двум тикам за долю секунды даёт ложный range.
+        span_s = float(now_mono - dq[0][0])
+        if span_s + 1e-9 < win_s * 0.9:
             return None
         mmin = min(v for (_t, v) in dq)
         mmax = max(v for (_t, v) in dq)
         if mmin <= 0 or mmax <= 0:
             return None
-        return (mmax / mmin - 1.0) * 10_000.0
+        # Как в WS-пульсе (ws_stream): (max−min)/текущий mid — иначе (max/min−1) завышает при росте цены внутри окна.
+        return (mmax - mmin) / float(mid_ref) * 10_000.0
 
     def _exit_skip_log_ok(self, symbol: str, now_mono: float, *, throttle_s: float = 30.0) -> bool:
         sym = str(symbol)
@@ -223,6 +359,7 @@ class ScalpAutoTrader:
         if pv is None:
             if self._exit_skip_log_ok(symbol, now_mono):
                 self._log.info("auto_trade: exit %s — пропуск: нет данных paper_position_entry_vwap*", symbol)
+            self._ana_inc("exit_no_position_data", exchange_id, symbol)
             return
         pos, entry = pv
         bids = order_book.get("bids") or []
@@ -246,6 +383,7 @@ class ScalpAutoTrader:
         if mid <= 0:
             if self._exit_skip_log_ok(symbol, now_mono):
                 self._log.info("auto_trade: exit %s — пропуск: mid<=0 (bid=%s ask=%s)", symbol, best_bid, best_ask)
+            self._ana_inc("exit_mid_invalid", exchange_id, symbol)
             return
         # pnl_bps: положительный = «в плюс» (и для long, и для short)
         if pos > 0:
@@ -259,14 +397,17 @@ class ScalpAutoTrader:
 
         # entry_vwap в paper уже "съедает" комиссию на вход (buy для long / sell для short),
         # но комиссия на закрытие ещё впереди. Для TP/MAX_HOLD полезнее ориентироваться на net-оценку.
-        fee_side_bps = float(getattr(self._s, "fee_bps_per_side", 0.0) or 0.0)
+        fee_side_bps = float(self._s.paper_trading_fee_bps())
         pnl_net_bps = pnl_bps - fee_side_bps
 
         tp = float(self._s.auto_trade_tp_bps)
         sl = float(self._s.auto_trade_sl_bps)
         sl_atr_mult = float(getattr(self._s, "auto_trade_sl_atr_mult", 0.0) or 0.0)
         hold = float(self._s.auto_trade_max_hold_seconds)
-        hold_min_pnl = float(getattr(self._s, "auto_trade_max_hold_min_pnl_bps", 0.0) or 0.0)
+        if pos > 0:
+            hold_min_pnl = float(self._s.auto_trade_max_hold_min_pnl_bps_long)
+        else:
+            hold_min_pnl = float(self._s.auto_trade_max_hold_min_pnl_bps_short)
         hold_hard = float(getattr(self._s, "auto_trade_max_hold_hard_seconds", 0.0) or 0.0)
 
         atr_bps = self._atr_bps_provider(exchange_id, sym) if self._atr_bps_provider else None
@@ -294,14 +435,19 @@ class ScalpAutoTrader:
                     reason = f"MAX_HOLD_HARD {age:.0f}s≥{hold_hard:.0f}s"
                 elif hold_min_pnl > 0 and pnl_net_bps + 1e-9 < hold_min_pnl:
                     if self._exit_skip_log_ok(sym, now_mono):
+                        side_tag = "long" if pos > 0 else "short"
                         self._log.info(
-                            "auto_trade: exit %s — пропуск MAX_HOLD: pnl_net≈%.1fbps (raw≈%.1f fee≈%.1f) < min=%.1f bps",
+                            "auto_trade: exit %s — пропуск MAX_HOLD (%s): pnl_net≈%.1fbps (raw≈%.1f fee≈%.1f) < min=%.1f bps",
                             sym,
+                            side_tag,
                             pnl_net_bps,
                             pnl_bps,
                             fee_side_bps,
                             hold_min_pnl,
                         )
+                        # Важно: считаем события пропуска только когда лог прошёл троттлинг,
+                        # иначе на WS будет десятки тысяч инкрементов/сессию и отчёт потеряет смысл.
+                        self._ana_inc("exit_max_hold_min_pnl_skip", exchange_id, sym)
                 else:
                     reason = f"MAX_HOLD {age:.0f}s≥{hold:.0f}s"
 
@@ -320,6 +466,7 @@ class ScalpAutoTrader:
         if has_pending and reason.startswith("TP") and not bool(self._s.auto_trade_tp_allow_with_pending):
             if self._exit_skip_log_ok(sym, now_mono):
                 self._log.info("auto_trade: exit %s — пропуск TP: есть pending-ордера по символу", sym)
+                self._ana_inc("exit_tp_blocked_by_pending", exchange_id, sym)
             return
         if has_pending and reason.startswith("TP") and bool(self._s.auto_trade_tp_allow_with_pending):
             if self._exit_skip_log_ok(sym, now_mono):
@@ -332,6 +479,7 @@ class ScalpAutoTrader:
         if exit_price <= 0:
             if self._exit_skip_log_ok(symbol, now_mono):
                 self._log.info("auto_trade: exit %s — пропуск: exit_price<=0", symbol)
+            self._ana_inc("exit_price_invalid", exchange_id, symbol)
             return
 
         amount = abs(pos)
@@ -366,6 +514,7 @@ class ScalpAutoTrader:
                     amount,
                     exit_price,
                 )
+            self._ana_inc("exit_place_limit_rejected", exchange_id, sym)
             return
         self._register_order(exchange_id, sym, order, kind="exit")
         self._mark(exchange_id, sym)
@@ -939,9 +1088,11 @@ class ScalpAutoTrader:
         order_book: dict | None = None,
     ) -> None:
         if self._sigma_spike_blocks(exchange_id, q.symbol):
+            self._ana_inc("sigma_spike_cooldown", exchange_id, q.symbol)
             self._log.debug("auto_trade: пауза после всплеска σ %s %s", exchange_id, q.symbol)
             return
         if not self._cooldown_ok(exchange_id, q.symbol):
+            self._ana_inc("cooldown", exchange_id, q.symbol)
             self._log.debug("auto_trade: кулдаун %s %s", exchange_id, q.symbol)
             return
 
@@ -952,11 +1103,31 @@ class ScalpAutoTrader:
             now = time.monotonic()
             mid_now = (q.bid + q.ask) / 2.0
             rng = self._mid_range_bps(exchange_id, q.symbol, mid_now, now)
-            if rng is not None and rng + 1e-9 < thr_range:
+            if rng is None:
+                self._ana_inc("quiet_market_warmup", exchange_id, q.symbol)
+                # warmup: пока нет окна mid — лучше не входить, иначе фильтр «тихий рынок» не работает на старте.
+                if self._quiet_skip_log_ok(exchange_id, q.symbol, now):
+                    win_s = float(getattr(self._s, "scalping_min_mid_range_window_seconds", 30.0) or 30.0)
+                    need_s = win_s * 0.9
+                    self._log.info(
+                        "auto_trade: quiet-market warmup — окно mid ещё не «созрело» (нужно покрытие времени "
+                        "≈%.0fs из %.0fs по тикам; без этого min/max по 1–2 котировкам дал бы ложный range). "
+                        "Не ошибка. «Диапазон mid» в WS-пульсе — фиксированный интервал сброса, цифры могут "
+                        "слегка расходиться. (%s %s)",
+                        need_s,
+                        win_s,
+                        q.symbol,
+                        exchange_id,
+                    )
+                return
+            if rng + 1e-9 < thr_range:
+                self._ana_inc("quiet_market_flat", exchange_id, q.symbol)
                 if self._quiet_skip_log_ok(exchange_id, q.symbol, now):
                     win_s = float(getattr(self._s, "scalping_min_mid_range_window_seconds", 30.0) or 30.0)
                     self._log.info(
-                        "auto_trade: пропуск входа — quiet-market: range≈%.1f bps за %.0fs < SCALPING_MIN_MID_RANGE_BPS=%.1f (%s %s)",
+                        "auto_trade: quiet-market — range(mid)≈%.1f bps за скользящие %.0fs < "
+                        "SCALPING_MIN_MID_RANGE_BPS=%.1f: вход не открываем (рынок «плоский» по этому критерию). "
+                        "Если часто режет на чуть меньшем range — понизьте порог или поставьте 0 (выкл.). (%s %s)",
                         rng,
                         win_s,
                         thr_range,
@@ -967,12 +1138,13 @@ class ScalpAutoTrader:
 
         min_imp = float(self._s.scalping_auto_trade_min_impulse_bps)
         if min_imp > 0 and sig.impulse_bps is not None and sig.impulse_bps + 1e-9 < min_imp:
+            self._ana_inc("min_impulse", exchange_id, q.symbol)
             self._log.info(
                 "auto_trade: пропуск scalp — |импульс|=%.2f bps < SCALPING_AUTO_TRADE_MIN_IMPULSE_BPS=%.1f "
                 "(на ws тики часто 1–5 bps; ориентир 2× комиссия ≈ %.0f bps круг)",
                 sig.impulse_bps,
                 min_imp,
-                2.0 * float(self._s.fee_bps_per_side),
+                2.0 * float(self._s.paper_trading_fee_bps() if self._s.paper else self._s.fee_bps_per_side),
             )
             return
 
@@ -1010,6 +1182,7 @@ class ScalpAutoTrader:
             sp_bps = spread_bps(q.bid, q.ask)
             lim = atr_bps * mult_sp
             if sp_bps > lim + 1e-9:
+                self._ana_inc("atr_spread_filter", exchange_id, q.symbol)
                 self._log.info(
                     "auto_trade: спред %.1f bps > ATR×%.2f (лимит %.1f, ATR≈%.1f) — пропуск",
                     sp_bps,
@@ -1030,6 +1203,7 @@ class ScalpAutoTrader:
                 if abs(pos) > 1e-12 and not self._pos_is_dust(pos, mid):
                     need_side = "sell" if pos > 0 else "buy"
                     if sig.side != need_side:
+                        self._ana_inc("reduce_only", exchange_id, q.symbol)
                         pos_src = "symbol" if self._s.auto_trade_reduce_only_scope == "symbol" else "leg"
                         self._log.info(
                             "auto_trade: reduce-only[%s/%s] %s %s: pos≈%.8f base → пропуск %s (нужно %s)",
@@ -1054,6 +1228,7 @@ class ScalpAutoTrader:
             if sig.side == "buy":
                 _base, vwap, _spent, complete = vwap_buy_with_quote(asks, notional)
                 if not complete:
+                    self._ana_inc("liquidity_not_enough", exchange_id, q.symbol)
                     self._log.warning(
                         "auto_trade: мало ликвидности в ask для %s (нужно ≈%.2f quote)",
                         q.symbol,
@@ -1062,6 +1237,7 @@ class ScalpAutoTrader:
                     return
                 slip = simulated_slippage_bps_buy(q.ask, vwap, mid)
                 if slip > max_slip:
+                    self._ana_inc("slippage_too_high", exchange_id, q.symbol)
                     self._log.warning(
                         "auto_trade: симуляция slippage %.1f bps > лимит %.1f (%s)",
                         slip,
@@ -1074,6 +1250,7 @@ class ScalpAutoTrader:
                 base_amt = notional / price_ref
                 _quote, vwap, _sold, complete = vwap_sell_base(bids, base_amt)
                 if not complete:
+                    self._ana_inc("liquidity_not_enough", exchange_id, q.symbol)
                     self._log.warning(
                         "auto_trade: мало ликвидности в bid для %s (нужно ≈%.8f base)",
                         q.symbol,
@@ -1082,6 +1259,7 @@ class ScalpAutoTrader:
                     return
                 slip = simulated_slippage_bps_sell(q.bid, vwap, mid)
                 if slip > max_slip:
+                    self._ana_inc("slippage_too_high", exchange_id, q.symbol)
                     self._log.warning(
                         "auto_trade: симуляция slippage %.1f bps > лимит %.1f (%s)",
                         slip,

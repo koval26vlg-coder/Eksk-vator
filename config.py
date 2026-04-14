@@ -34,6 +34,8 @@ class Settings:
     exchanges: tuple[str, ...]
     symbols: tuple[str, ...]
     fee_bps_per_side: float
+    #: Только paper: комиссия стороны при моделировании лимиток (maker обычно ниже ARBITRAGE_FEE_BPS_PER_SIDE). None = как fee_bps_per_side.
+    paper_fee_bps_per_side: float | None
     poll_seconds: float
     paper: bool
     scalping_move_bps: float
@@ -78,7 +80,12 @@ class Settings:
     #: Авто-выход: макс. время удержания позиции (сек); 0 = выкл.
     auto_trade_max_hold_seconds: float
     #: Авто-выход (paper): при MAX_HOLD закрывать только если pnl_bps >= порога; 0 = без порога.
+    #: Базовое значение; если заданы *_LONG / *_SHORT — для соответствующей стороны берутся они.
     auto_trade_max_hold_min_pnl_bps: float
+    #: MIN_PNL для long при MAX_HOLD (пустой env → как auto_trade_max_hold_min_pnl_bps).
+    auto_trade_max_hold_min_pnl_bps_long: float
+    #: MIN_PNL для short при MAX_HOLD (пустой env → как auto_trade_max_hold_min_pnl_bps).
+    auto_trade_max_hold_min_pnl_bps_short: float
     #: Авто-выход (paper): "жёсткий" MAX_HOLD — закрыть позицию при достижении времени, независимо от pnl/min_pnl. 0 = выкл.
     auto_trade_max_hold_hard_seconds: float
     #: Авто-выход (paper): разрешить TP даже если есть pending-ордера по symbol (обычно лучше false).
@@ -126,8 +133,6 @@ class Settings:
     scalping_min_mid_range_bps: float
     # Окно для quiet-market guard (сек). Используется только если scalping_min_mid_range_bps > 0.
     scalping_min_mid_range_window_seconds: float
-    # Минимум точек mid в окне для guard (warmup). Пока точек меньше — входы пропускаем. 0 = без warmup.
-    scalping_min_mid_range_min_samples: int
     # TA (OHLCV): ta_regime, ta_conservative, ta_aggressive, ta_trend
     ta_timeframe: str
     ta_ohlcv_limit: int
@@ -154,6 +159,30 @@ class Settings:
     ta_signal_one_per_bar: bool
     #: Мин. |+DI − −DI| для ta_trend; 0 — выкл.
     ta_trend_min_di_diff: float
+    #: Под-вариант orderflow: окно ленты сделок (сек), для WS.
+    orderflow_tape_window_seconds: float
+    orderflow_tape_max_events: int
+    #: Мин. суммарный объём сделок в окне (quote), чтобы учитывать ленту.
+    orderflow_tape_min_total_quote: float
+    orderflow_tape_long_share: float
+    orderflow_tape_short_share: float
+    orderflow_book_levels: int
+    #: bid_notional / ask_notional по верхним уровням — порог «давления».
+    orderflow_book_ratio_long: float
+    orderflow_book_ratio_short: float
+    orderflow_book_min_side_quote: float
+    #: both — лента и книга; either — достаточно одного условия.
+    orderflow_signal_mode: str
+    orderflow_cooldown_seconds: float
+    #: DATA_MODE=ws: подписываться на watch_trades, если orderflow в списке вариантов (или явно в env).
+    orderflow_ws_collect: bool
+
+    def paper_trading_fee_bps(self) -> float:
+        """Paper: комиссия одной стороны для лимиток (часто maker < taker). Иначе — ARBITRAGE_FEE_BPS_PER_SIDE."""
+        p = self.paper_fee_bps_per_side
+        if p is not None:
+            return float(p)
+        return float(self.fee_bps_per_side)
 
 
 def load_settings() -> Settings:
@@ -161,6 +190,8 @@ def load_settings() -> Settings:
     raw_ex = os.getenv("ARBITRAGE_EXCHANGES", "binance,bybit")
     raw_sym = os.getenv("ARBITRAGE_SYMBOLS", "BTC/USDT")
     fee = float(os.getenv("ARBITRAGE_FEE_BPS_PER_SIDE", "10"))
+    _raw_pfee = os.getenv("PAPER_FEE_BPS_PER_SIDE", "").strip()
+    paper_fee_opt: float | None = float(_raw_pfee) if _raw_pfee else None
     poll = float(os.getenv("ARBITRAGE_POLL_SECONDS", "5"))
     paper = os.getenv("ARBITRAGE_PAPER", "true").lower() in ("1", "true", "yes", "on")
 
@@ -216,6 +247,10 @@ def load_settings() -> Settings:
     at_sl = float(os.getenv("AUTO_TRADE_SL_BPS", "0"))
     at_hold = float(os.getenv("AUTO_TRADE_MAX_HOLD_SECONDS", "0"))
     at_hold_min_pnl = float(os.getenv("AUTO_TRADE_MAX_HOLD_MIN_PNL_BPS", "0"))
+    _hml_raw = os.getenv("AUTO_TRADE_MAX_HOLD_MIN_PNL_BPS_LONG", "").strip()
+    _hms_raw = os.getenv("AUTO_TRADE_MAX_HOLD_MIN_PNL_BPS_SHORT", "").strip()
+    at_hold_min_pnl_long = float(_hml_raw) if _hml_raw else at_hold_min_pnl
+    at_hold_min_pnl_short = float(_hms_raw) if _hms_raw else at_hold_min_pnl
     at_hold_hard = float(os.getenv("AUTO_TRADE_MAX_HOLD_HARD_SECONDS", "0"))
     at_sl_atr_mult = float(os.getenv("AUTO_TRADE_SL_ATR_MULT", "0"))
     at_tp_allow_pending = os.getenv("AUTO_TRADE_TP_ALLOW_WITH_PENDING", "false").lower() in (
@@ -243,6 +278,30 @@ def load_settings() -> Settings:
     raw_ta_rot = os.getenv("SCALPING_TA_ROTATE_VARIANTS", "").strip()
     ta_rotate_variants = tuple(x.strip().lower() for x in raw_ta_rot.split(",") if x.strip())
     rotate_interval = float(os.getenv("SCALPING_ROTATE_INTERVAL_SECONDS", "3600"))
+
+    of_tape_win = float(os.getenv("ORDERFLOW_TAPE_WINDOW_SECONDS", "2.5"))
+    of_tape_max = int(os.getenv("ORDERFLOW_TAPE_MAX_EVENTS", "800"))
+    of_tape_min_q = float(os.getenv("ORDERFLOW_TAPE_MIN_TOTAL_QUOTE", "400"))
+    of_tape_long = float(os.getenv("ORDERFLOW_TAPE_LONG_SHARE", "0.58"))
+    of_tape_short = float(os.getenv("ORDERFLOW_TAPE_SHORT_SHARE", "0.42"))
+    of_book_lv = int(os.getenv("ORDERFLOW_BOOK_LEVELS", "8"))
+    of_br_long = float(os.getenv("ORDERFLOW_BOOK_RATIO_LONG", "1.14"))
+    _raw_br_s = os.getenv("ORDERFLOW_BOOK_RATIO_SHORT", "").strip()
+    of_br_short = float(_raw_br_s) if _raw_br_s else (1.0 / of_br_long if of_br_long > 0 else 0.88)
+    of_book_min_side = float(os.getenv("ORDERFLOW_BOOK_MIN_SIDE_QUOTE", "80"))
+    _of_mode = os.getenv("ORDERFLOW_SIGNAL_MODE", "both").strip().lower()
+    if _of_mode not in ("both", "either"):
+        raise ValueError("ORDERFLOW_SIGNAL_MODE: both | either")
+    orderflow_signal_mode = _of_mode
+    of_cd = float(os.getenv("ORDERFLOW_COOLDOWN_SECONDS", "2.5"))
+    of_in_rot = "orderflow" in rotate_variants or "orderflow" in ta_rotate_variants
+    _raw_of_ws = os.getenv("ORDERFLOW_WS_COLLECT", "").strip().lower()
+    if _raw_of_ws in ("1", "true", "yes", "on"):
+        orderflow_ws_collect = True
+    elif _raw_of_ws in ("0", "false", "no", "off"):
+        orderflow_ws_collect = False
+    else:
+        orderflow_ws_collect = bool(variant == "orderflow" or of_in_rot)
 
     ad_depth_lv = int(os.getenv("SCALPING_ADAPTIVE_DEPTH_LEVELS", "5"))
     ad_depth_thin = float(os.getenv("SCALPING_ADAPTIVE_DEPTH_THIN", "300"))
@@ -276,7 +335,6 @@ def load_settings() -> Settings:
     min_impulse_at = float(os.getenv("SCALPING_AUTO_TRADE_MIN_IMPULSE_BPS", "0"))
     min_mid_range_bps = float(os.getenv("SCALPING_MIN_MID_RANGE_BPS", "0"))
     min_mid_range_win = float(os.getenv("SCALPING_MIN_MID_RANGE_WINDOW_SECONDS", "30"))
-    min_mid_range_min_samples = int(os.getenv("SCALPING_MIN_MID_RANGE_MIN_SAMPLES", "0"))
 
     ta_timeframe = os.getenv("TA_TIMEFRAME", "5m").strip()
     ta_ohlcv_limit = int(os.getenv("TA_OHLCV_LIMIT", "120"))
@@ -382,7 +440,9 @@ def load_settings() -> Settings:
         if auto_trade_max_open < 1:
             raise ValueError("AUTO_TRADE_MAX_OPEN_ORDERS должен быть >= 1")
         risk_max_orders = min(risk_max_orders, auto_trade_max_open)
-        risk_total = min(risk_total, float(risk_max_orders) * auto_trade_notional)
+        # Важно: total-notional — отдельный лимит бюджета. Не "сжимаем" его до slots×AUTO_TRADE_NOTIONAL,
+        # иначе выходы (exit) могут регулярно получать отказ при небольшом дрейфе notional (qty×price) и комиссиях.
+        # При маленьком бюджете задайте RISK_MAX_TOTAL_NOTIONAL явно.
     if risk_max_orders < 1:
         raise ValueError("RISK_MAX_OPEN_ORDERS должен быть >= 1")
     if risk_total <= 0:
@@ -401,16 +461,17 @@ def load_settings() -> Settings:
         "ta_aggressive",
         "ta_trend",
         "ta_rotate",
+        "orderflow",
     )
     if strategy == "scalping" and variant not in _scalping_names:
         raise ValueError(
             "SCALPING_VARIANT: momentum, mean_reversion, filtered_momentum, rotate, adaptive, "
-            "ta_regime, ta_conservative, ta_aggressive, ta_trend или ta_rotate"
+            "ta_regime, ta_conservative, ta_aggressive, ta_trend, ta_rotate или orderflow"
         )
     if strategy == "scalping" and variant == "rotate":
         if len(rotate_variants) < 2:
             raise ValueError("SCALPING_ROTATE_VARIANTS: укажите минимум два имени через запятую")
-        allowed_sub = ("momentum", "mean_reversion", "filtered_momentum")
+        allowed_sub = ("momentum", "mean_reversion", "filtered_momentum", "orderflow")
         for rv in rotate_variants:
             if rv not in allowed_sub:
                 raise ValueError(f"SCALPING_ROTATE_VARIANTS: неизвестное имя '{rv}'")
@@ -418,15 +479,36 @@ def load_settings() -> Settings:
             raise ValueError("SCALPING_ROTATE_INTERVAL_SECONDS должен быть > 0")
     if strategy == "scalping" and variant == "ta_rotate":
         if len(ta_rotate_variants) < 2:
-            raise ValueError("SCALPING_TA_ROTATE_VARIANTS: укажите минимум два: ta_conservative, ta_aggressive, ta_trend")
-        allowed_ta_rot = ("ta_conservative", "ta_aggressive", "ta_trend")
+            raise ValueError("SCALPING_TA_ROTATE_VARIANTS: укажите минимум два под-варианта через запятую")
+        allowed_ta_rot = ("ta_conservative", "ta_aggressive", "ta_trend", "orderflow")
         for rv in ta_rotate_variants:
             if rv not in allowed_ta_rot:
                 raise ValueError(
-                    f"SCALPING_TA_ROTATE_VARIANTS: допустимо только {allowed_ta_rot}, получено '{rv}'"
+                    f"SCALPING_TA_ROTATE_VARIANTS: неизвестное имя '{rv}' (допустимо: {allowed_ta_rot})"
                 )
         if rotate_interval <= 0:
             raise ValueError("SCALPING_ROTATE_INTERVAL_SECONDS должен быть > 0 для ta_rotate")
+    if strategy == "scalping" and (
+        variant == "orderflow" or "orderflow" in rotate_variants or "orderflow" in ta_rotate_variants
+    ):
+        if of_tape_win <= 0 or of_tape_win > 120:
+            raise ValueError("ORDERFLOW_TAPE_WINDOW_SECONDS обычно 0.2…120")
+        if of_tape_max < 8:
+            raise ValueError("ORDERFLOW_TAPE_MAX_EVENTS должен быть >= 8")
+        if of_tape_min_q < 0:
+            raise ValueError("ORDERFLOW_TAPE_MIN_TOTAL_QUOTE должен быть >= 0")
+        if not (of_tape_short < 0.5 < of_tape_long < 1.0):
+            raise ValueError("ORDERFLOW_TAPE_SHORT_SHARE < 0.5 < ORDERFLOW_TAPE_LONG_SHARE < 1")
+        if of_book_lv < 1 or of_book_lv > 80:
+            raise ValueError("ORDERFLOW_BOOK_LEVELS обычно 1…80")
+        if of_br_long <= 1.0:
+            raise ValueError("ORDERFLOW_BOOK_RATIO_LONG должен быть > 1")
+        if of_br_short <= 0 or of_br_short >= 1.0:
+            raise ValueError("ORDERFLOW_BOOK_RATIO_SHORT должен быть в (0, 1)")
+        if of_book_min_side < 0:
+            raise ValueError("ORDERFLOW_BOOK_MIN_SIDE_QUOTE должен быть >= 0")
+        if of_cd < 0:
+            raise ValueError("ORDERFLOW_COOLDOWN_SECONDS должен быть >= 0")
     if strategy == "scalping" and variant == "adaptive":
         if ad_depth_thin <= 0 or ad_depth_thick <= 0 or ad_depth_thin >= ad_depth_thick:
             raise ValueError("SCALPING_ADAPTIVE_DEPTH_THIN/THICK: 0 < thin < thick")
@@ -442,6 +524,8 @@ def load_settings() -> Settings:
         raise ValueError("DATA_MODE: rest или ws")
     if orderbook_limit < 5 or orderbook_limit > 500:
         raise ValueError("ORDERBOOK_LIMIT обычно 5…500")
+    if paper_fee_opt is not None and (paper_fee_opt < 0 or paper_fee_opt > 200):
+        raise ValueError("PAPER_FEE_BPS_PER_SIDE: 0…200 (пусто = как ARBITRAGE_FEE_BPS_PER_SIDE)")
     if not paper and auto_trade and (not api_key or not api_secret):
         raise ValueError(
             "При AUTO_TRADE без бумаги задайте ключи: "
@@ -459,6 +543,10 @@ def load_settings() -> Settings:
         raise ValueError("AUTO_TRADE_MAX_HOLD_SECONDS должен быть >= 0 (0 — выкл.)")
     if at_hold_min_pnl < 0:
         raise ValueError("AUTO_TRADE_MAX_HOLD_MIN_PNL_BPS должен быть >= 0 (0 — выкл.)")
+    if at_hold_min_pnl_long < 0 or at_hold_min_pnl_short < 0:
+        raise ValueError(
+            "AUTO_TRADE_MAX_HOLD_MIN_PNL_BPS_LONG/SHORT должны быть >= 0 (0 — выкл. порог для стороны)"
+        )
     if at_hold_hard < 0:
         raise ValueError("AUTO_TRADE_MAX_HOLD_HARD_SECONDS должен быть >= 0 (0 — выкл.)")
     if pos_dust_quote < 0:
@@ -485,8 +573,6 @@ def load_settings() -> Settings:
         raise ValueError("SCALPING_MIN_MID_RANGE_BPS должен быть >= 0 (0 — выкл.)")
     if min_mid_range_win <= 0:
         raise ValueError("SCALPING_MIN_MID_RANGE_WINDOW_SECONDS должен быть > 0")
-    if min_mid_range_min_samples < 0:
-        raise ValueError("SCALPING_MIN_MID_RANGE_MIN_SAMPLES должен быть >= 0")
 
     cap_max_loss = float(os.getenv("CAPITAL_MAX_SESSION_LOSS_QUOTE", "0"))
     cap_cd = float(os.getenv("CAPITAL_COOLDOWN_AFTER_LOSS_SECONDS", "0"))
@@ -542,6 +628,7 @@ def load_settings() -> Settings:
         exchanges=tuple(ex_list),
         symbols=tuple(sym_list),
         fee_bps_per_side=fee,
+        paper_fee_bps_per_side=paper_fee_opt,
         poll_seconds=poll,
         paper=paper,
         scalping_move_bps=move_bps,
@@ -575,6 +662,8 @@ def load_settings() -> Settings:
         auto_trade_sl_atr_mult=at_sl_atr_mult,
         auto_trade_max_hold_seconds=at_hold,
         auto_trade_max_hold_min_pnl_bps=at_hold_min_pnl,
+        auto_trade_max_hold_min_pnl_bps_long=at_hold_min_pnl_long,
+        auto_trade_max_hold_min_pnl_bps_short=at_hold_min_pnl_short,
         auto_trade_max_hold_hard_seconds=at_hold_hard,
         auto_trade_tp_allow_with_pending=at_tp_allow_pending,
         auto_trade_arbitrage=auto_trade_arbitrage,
@@ -614,7 +703,6 @@ def load_settings() -> Settings:
         scalping_auto_trade_min_impulse_bps=min_impulse_at,
         scalping_min_mid_range_bps=min_mid_range_bps,
         scalping_min_mid_range_window_seconds=min_mid_range_win,
-        scalping_min_mid_range_min_samples=min_mid_range_min_samples,
         ta_timeframe=ta_timeframe,
         ta_ohlcv_limit=ta_ohlcv_limit,
         ta_ohlcv_refresh_seconds=ta_ohlcv_refresh,
@@ -637,4 +725,16 @@ def load_settings() -> Settings:
         ta_aggr_require_poc=ta_aggr_poc,
         ta_signal_one_per_bar=ta_one_per_bar,
         ta_trend_min_di_diff=ta_min_di,
+        orderflow_tape_window_seconds=of_tape_win,
+        orderflow_tape_max_events=of_tape_max,
+        orderflow_tape_min_total_quote=of_tape_min_q,
+        orderflow_tape_long_share=of_tape_long,
+        orderflow_tape_short_share=of_tape_short,
+        orderflow_book_levels=of_book_lv,
+        orderflow_book_ratio_long=of_br_long,
+        orderflow_book_ratio_short=of_br_short,
+        orderflow_book_min_side_quote=of_book_min_side,
+        orderflow_signal_mode=orderflow_signal_mode,
+        orderflow_cooldown_seconds=of_cd,
+        orderflow_ws_collect=orderflow_ws_collect,
     )

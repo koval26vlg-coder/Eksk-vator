@@ -14,6 +14,7 @@ from ccxt.base.errors import NetworkError
 from auto_trade import ArbAutoTrader, ScalpAutoTrader
 from protocols import ScalpingStrategy
 from scalping import ScalpSignalLogDeduper
+from scalping_orderflow import OrderflowTapeStore
 from config import Settings
 from execution import OrderExecutor
 from orderbook import format_spread_bid_ask, quote_from_order_book, snapshot_from_order_book, spread_bps
@@ -61,11 +62,23 @@ def make_pro_exchange(exchange_id: str) -> ccxtpro.Exchange:
 
 async def _safe_close_exchange(ex: ccxtpro.Exchange) -> None:
     try:
-        await ex.close()
+        # На отмене задач (Ctrl+C) даём close() завершиться, иначе aiohttp-сессия может остаться незакрытой.
+        await asyncio.shield(ex.close())
     except asyncio.CancelledError:
-        raise
+        return
     except Exception as e:
         log.warning("WS: exchange.close() — %s", e)
+
+
+async def _gather_ws_watchers(watchers: list[asyncio.Task[Any]]) -> None:
+    """Дождаться вотчеров; при остановке (Ctrl+C / cancel) отменить задачи и дождаться их finally (ccxt.pro close)."""
+    try:
+        await asyncio.gather(*watchers)
+    finally:
+        for t in watchers:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*watchers, return_exceptions=True)
 
 
 class LatestQuotes:
@@ -95,11 +108,13 @@ async def run_watch_tasks(
     orderbook_limit: int,
     on_order_book: OnOrderBook,
     *extra_awaitables: Any,
+    tape_store: OrderflowTapeStore | None = None,
 ) -> None:
     """Один процесс ccxt.pro: параллельный watch_order_book по символам.
 
     extra_awaitables — доп. корутины (например пульс), в одном gather с вотчерами,
     чтобы при остановке один finally закрыл exchange.
+    tape_store — если задан, параллельно watch_trades и запись в буфер orderflow.
     """
     def _is_reconnectable_ws_error(e: BaseException) -> bool:
         msg = str(e)
@@ -143,7 +158,16 @@ async def run_watch_tasks(
                     if q:
                         await on_order_book(q, ob)
 
-            await asyncio.gather(*(one(s) for s in symbols), *extra_awaitables)
+            async def one_trades(sym: str) -> None:
+                while True:
+                    trades = await ex.watch_trades(sym)
+                    if tape_store is not None:
+                        for t in trades:
+                            tape_store.push(exchange_id, sym, t)
+
+            ob_tasks = [one(s) for s in symbols]
+            trade_tasks = [one_trades(s) for s in symbols] if tape_store is not None else []
+            await asyncio.gather(*ob_tasks, *trade_tasks, *extra_awaitables)
             backoff_s = 1.0
         except asyncio.CancelledError:
             raise
@@ -172,6 +196,7 @@ async def run_scalping_ws(
     executor: OrderExecutor | None = None,
     depth_log_levels: int = 5,
     scanner: ArbitrageScanner | None = None,
+    orderflow_tape_store: OrderflowTapeStore | None = None,
 ) -> None:
     """Скальпинг: по одному WS ccxt.pro на каждую биржу из settings.exchanges, общий пульс.
 
@@ -375,6 +400,21 @@ async def run_scalping_ws(
                     line = f"{line} | {gap}"
             log_cb.info("WS: тиков=%s | %s", ticks, line)
 
+    tape_for_ws = (
+        orderflow_tape_store
+        if (
+            orderflow_tape_store is not None
+            and settings.orderflow_ws_collect
+            and settings.strategy == "scalping"
+        )
+        else None
+    )
+    if tape_for_ws is not None:
+        log_cb.info(
+            "WS orderflow: лента сделок watch_trades + буфер %.1fs (ORDERFLOW_WS_COLLECT)",
+            settings.orderflow_tape_window_seconds,
+        )
+
     watchers = [
         asyncio.create_task(
             run_watch_tasks(
@@ -382,13 +422,14 @@ async def run_scalping_ws(
                 watch_syms,
                 settings.orderbook_limit,
                 make_on_ob(eid),
+                tape_store=tape_for_ws,
             )
         )
         for eid in settings.exchanges
     ]
     if settings.scalping_ws_heartbeat_seconds > 0:
         watchers.append(asyncio.create_task(ws_heartbeat()))
-    await asyncio.gather(*watchers)
+    await _gather_ws_watchers(watchers)
 
 
 async def run_arbitrage_ws(
@@ -437,4 +478,4 @@ async def run_arbitrage_ws(
         )
         for eid in settings.exchanges
     ]
-    await asyncio.gather(*tasks)
+    await _gather_ws_watchers(tasks)
