@@ -62,10 +62,23 @@ def make_pro_exchange(exchange_id: str) -> ccxtpro.Exchange:
 
 async def _safe_close_exchange(ex: ccxtpro.Exchange) -> None:
     try:
-        # На отмене задач (Ctrl+C) даём close() завершиться, иначе aiohttp-сессия может остаться незакрытой.
+        # На отмене задач (Ctrl+C / таймаут) close() должен реально завершиться,
+        # иначе aiohttp-сессия может остаться незакрытой и появится "Unclosed client session".
         await asyncio.shield(ex.close())
     except asyncio.CancelledError:
-        return
+        # shield() защищает сам close() от отмены, но текущая задача всё равно получает CancelledError
+        # и может выйти, не дождавшись завершения close(). Снимаем pending-cancel (если поддерживается)
+        # и дожидаемся close() ещё раз.
+        t = asyncio.current_task()
+        if t is not None and hasattr(t, "uncancel"):
+            try:
+                t.uncancel()  # py>=3.11
+            except Exception:
+                pass
+        try:
+            await asyncio.shield(ex.close())
+        finally:
+            return
     except Exception as e:
         log.warning("WS: exchange.close() — %s", e)
 
