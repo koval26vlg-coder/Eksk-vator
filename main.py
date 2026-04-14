@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 import time
 
@@ -517,7 +518,22 @@ async def run_loop() -> None:
 def main() -> None:
     setup_logging()
     try:
-        asyncio.run(run_loop())
+        run_seconds_raw = os.getenv("RUN_SECONDS", "").strip()
+        if run_seconds_raw:
+            run_seconds = float(run_seconds_raw)
+
+            async def _run_with_timeout() -> None:
+                t = asyncio.create_task(run_loop())
+                try:
+                    await asyncio.wait_for(t, timeout=run_seconds)
+                except asyncio.TimeoutError:
+                    logging.getLogger("arbitrage").info("Остановка по таймауту RUN_SECONDS=%.1f", run_seconds)
+                    t.cancel()
+                    await asyncio.gather(t, return_exceptions=True)
+
+            asyncio.run(_run_with_timeout())
+        else:
+            asyncio.run(run_loop())
     except KeyboardInterrupt:
         logging.getLogger("arbitrage").info("Остановка по Ctrl+C")
 
