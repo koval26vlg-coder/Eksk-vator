@@ -347,7 +347,7 @@ def load_settings() -> Settings:
     ta_bb_std = float(os.getenv("TA_BB_STD", "2.0"))
     ta_adx_period = int(os.getenv("TA_ADX_PERIOD", "14"))
     ta_atr_period = int(os.getenv("TA_ATR_PERIOD", "14"))
-    ta_trend_adx_trg = float(os.getenv("TA_TREND_ADX_TRIGGER", "22"))
+    ta_trend_adx_trg = float(os.getenv("TA_TREND_ADX_TRIGGER", "30"))
     ta_vwap_bars = int(os.getenv("TA_VWAP_BARS", "48"))
     ta_vp_bins = int(os.getenv("TA_VP_BINS", "24"))
     ta_aggr_eps = float(os.getenv("TA_AGGRESSIVE_EPS_BPS", "3"))
