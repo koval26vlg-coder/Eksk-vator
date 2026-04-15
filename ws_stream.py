@@ -85,8 +85,27 @@ async def _safe_close_exchange(ex: ccxtpro.Exchange) -> None:
 
 async def _gather_ws_watchers(watchers: list[asyncio.Task[Any]]) -> None:
     """Дождаться вотчеров; при остановке (Ctrl+C / cancel) отменить задачи и дождаться их finally (ccxt.pro close)."""
+    def _is_shutdowny_ws_error(e: BaseException) -> bool:
+        # На остановке/разрыве WS aiohttp может бросать это из ping_loop/send_frame.
+        # Такие ошибки не должны валить процесс при shutdown.
+        name = type(e).__name__
+        msg = str(e).lower()
+        if name in {"ClientConnectionResetError", "ClientOSError", "ServerDisconnectedError"}:
+            return True
+        if "cannot write to closing transport" in msg:
+            return True
+        if "connection reset by peer" in msg:
+            return True
+        return False
+
     try:
-        await asyncio.gather(*watchers)
+        results = await asyncio.gather(*watchers, return_exceptions=True)
+        for r in results:
+            if isinstance(r, BaseException):
+                if isinstance(r, asyncio.CancelledError) or _is_shutdowny_ws_error(r):
+                    continue
+                # Не фатально: вотчеры сами переподключаются; тут важно только корректно закрыться.
+                log.warning("WS: watcher завершился с ошибкой: %r", r)
     finally:
         for t in watchers:
             if not t.done():
@@ -139,6 +158,11 @@ async def run_watch_tasks(
             return True
         # Generic network/websocket hiccups
         if isinstance(e, NetworkError):
+            return True
+        # aiohttp transport closing / reset (часто при разрыве WS или остановке)
+        if "cannot write to closing transport" in low:
+            return True
+        if "connection reset by peer" in low:
             return True
         return False
 
