@@ -234,6 +234,7 @@ def load_settings() -> Settings:
         "on",
     )
     auto_trade = os.getenv("AUTO_TRADE", "false").lower() in ("1", "true", "yes", "on")
+    auto_trade_profile = os.getenv("AUTO_TRADE_PROFILE", "").strip().lower()
     auto_trade_notional = float(os.getenv("AUTO_TRADE_NOTIONAL", "50"))
     auto_trade_cooldown = float(os.getenv("AUTO_TRADE_COOLDOWN_SECONDS", "3"))
     _raw_cd_scope = os.getenv("AUTO_TRADE_COOLDOWN_SCOPE", "exchange_symbol").strip().lower()
@@ -389,6 +390,29 @@ def load_settings() -> Settings:
     ta_trend_min_rsi_short = float(os.getenv("TA_TREND_MIN_RSI_SHORT", "0"))
     ta_trend_max_ext_short = float(os.getenv("TA_TREND_MAX_EXTEND_BPS_SHORT", "0"))
     ta_regime_mode = os.getenv("TA_REGIME_MODE", "hierarchy").strip().lower()
+
+    # ---------------------------------------------------------------------
+    # AUTO_TRADE profiles: one switch for a coherent parameter bundle.
+    #
+    # quality: fewer trades, better signal confirmation, TP not "near zero"
+    # after fees; also reduces notional in high ATR regimes.
+    # ---------------------------------------------------------------------
+    if auto_trade and auto_trade_profile in ("quality", "quality-first", "quality_first"):
+        # TP should clear exit fee and still leave some net edge.
+        at_tp = 3.0
+        # Filter weak signals (noise); for ws ticks 6–12 bps is typical for majors.
+        min_impulse_at = 8.0
+        # TA trend confirmation: require stronger +DI/-DI separation.
+        ta_min_di = 6.0
+        # ATR→notional: shrink exposure when ATR is high; keep a small floor.
+        atr_not_ref = 20.0
+        atr_not_floor = 0.25
+        # Re-introduce soft hold with a profitability threshold; keep hard hold disabled.
+        at_hold = 180.0
+        at_hold_min_pnl = 3.0
+        at_hold_min_pnl_long = at_hold_min_pnl
+        at_hold_min_pnl_short = at_hold_min_pnl
+        at_hold_hard = 0.0
 
     def _first_nonempty(*names: str) -> str | None:
         for name in names:
