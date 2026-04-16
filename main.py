@@ -385,9 +385,22 @@ async def run_loop() -> None:
                 "вкл." if settings.orderflow_ws_collect else "выкл. (только стакан)",
             )
         elif settings.scalping_variant.startswith("ta_"):
+            ta_trend_extra = ""
+            if settings.scalping_variant == "ta_trend":
+                bits: list[str] = []
+                if settings.ta_trend_max_rsi_long > 0:
+                    bits.append(f"LONG RSI≤{settings.ta_trend_max_rsi_long:.0f}")
+                if settings.ta_trend_max_extend_bps_long > 0:
+                    bits.append(f"LONG над SMA≤{settings.ta_trend_max_extend_bps_long:.0f} bps")
+                if settings.ta_trend_min_rsi_short > 0:
+                    bits.append(f"SHORT RSI≥{settings.ta_trend_min_rsi_short:.0f}")
+                if settings.ta_trend_max_extend_bps_short > 0:
+                    bits.append(f"SHORT под SMA≤{settings.ta_trend_max_extend_bps_short:.0f} bps")
+                if bits:
+                    ta_trend_extra = "; ta_trend фильтры: " + ", ".join(bits)
             log.info(
                 "Скальпинг TA (%s): OHLCV %s×%s, REST каждые %.0fs (TA_OHLCV_*); ta_regime: ADX≥%.1f→тренд, узкие BB≤%.0f bps→консерв.; "
-                "RSI/ATR Wilder; дедуп на свечу=%s; TA_TREND_MIN_DI_DIFF=%.1f%s",
+                "RSI/ATR Wilder; дедуп на свечу=%s; TA_TREND_MIN_DI_DIFF=%.1f%s%s",
                 settings.scalping_variant,
                 settings.ta_timeframe,
                 settings.ta_ohlcv_limit,
@@ -401,6 +414,7 @@ async def run_loop() -> None:
                     if settings.scalping_variant == "ta_regime"
                     else ""
                 ),
+                ta_trend_extra,
             )
             if settings.auto_trade and settings.scalping_auto_trade_min_impulse_bps >= 3:
                 log.info(

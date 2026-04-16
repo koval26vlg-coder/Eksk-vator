@@ -159,6 +159,14 @@ class Settings:
     ta_signal_one_per_bar: bool
     #: Мин. |+DI − −DI| для ta_trend; 0 — выкл.
     ta_trend_min_di_diff: float
+    #: ta_trend LONG: не входить, если RSI выше порога (0 — выкл.). Меньше «покупок на перегреве».
+    ta_trend_max_rsi_long: float
+    #: ta_trend LONG: не входить, если mid выше SMA более чем на N bps (0 — выкл.). Ограничение «догона» вверх.
+    ta_trend_max_extend_bps_long: float
+    #: ta_trend SHORT: не входить, если RSI ниже порога (0 — выкл.).
+    ta_trend_min_rsi_short: float
+    #: ta_trend SHORT: не входить, если mid ниже SMA более чем на N bps (0 — выкл.).
+    ta_trend_max_extend_bps_short: float
     #: Под-вариант orderflow: окно ленты сделок (сек), для WS.
     orderflow_tape_window_seconds: float
     orderflow_tape_max_events: int
@@ -367,6 +375,10 @@ def load_settings() -> Settings:
         "on",
     )
     ta_min_di = float(os.getenv("TA_TREND_MIN_DI_DIFF", "0"))
+    ta_trend_max_rsi_long = float(os.getenv("TA_TREND_MAX_RSI_LONG", "0"))
+    ta_trend_max_ext_long = float(os.getenv("TA_TREND_MAX_EXTEND_BPS_LONG", "0"))
+    ta_trend_min_rsi_short = float(os.getenv("TA_TREND_MIN_RSI_SHORT", "0"))
+    ta_trend_max_ext_short = float(os.getenv("TA_TREND_MAX_EXTEND_BPS_SHORT", "0"))
     ta_regime_mode = os.getenv("TA_REGIME_MODE", "hierarchy").strip().lower()
 
     def _first_nonempty(*names: str) -> str | None:
@@ -598,6 +610,14 @@ def load_settings() -> Settings:
             raise ValueError("TA_BAND_NEAR_BPS обычно 0…300")
         if ta_min_di < 0:
             raise ValueError("TA_TREND_MIN_DI_DIFF должен быть >= 0")
+        if ta_trend_max_rsi_long < 0 or ta_trend_max_rsi_long > 100:
+            raise ValueError("TA_TREND_MAX_RSI_LONG: 0…100 (0 — выкл.)")
+        if ta_trend_max_ext_long < 0 or ta_trend_max_ext_long > 500:
+            raise ValueError("TA_TREND_MAX_EXTEND_BPS_LONG: 0…500 (0 — выкл.)")
+        if ta_trend_min_rsi_short < 0 or ta_trend_min_rsi_short > 100:
+            raise ValueError("TA_TREND_MIN_RSI_SHORT: 0…100 (0 — выкл.)")
+        if ta_trend_max_ext_short < 0 or ta_trend_max_ext_short > 500:
+            raise ValueError("TA_TREND_MAX_EXTEND_BPS_SHORT: 0…500 (0 — выкл.)")
         if variant == "ta_regime" and ta_regime_mode not in ("hierarchy", "best_signal"):
             raise ValueError("TA_REGIME_MODE: hierarchy или best_signal")
 
@@ -725,6 +745,10 @@ def load_settings() -> Settings:
         ta_aggr_require_poc=ta_aggr_poc,
         ta_signal_one_per_bar=ta_one_per_bar,
         ta_trend_min_di_diff=ta_min_di,
+        ta_trend_max_rsi_long=ta_trend_max_rsi_long,
+        ta_trend_max_extend_bps_long=ta_trend_max_ext_long,
+        ta_trend_min_rsi_short=ta_trend_min_rsi_short,
+        ta_trend_max_extend_bps_short=ta_trend_max_ext_short,
         orderflow_tape_window_seconds=of_tape_win,
         orderflow_tape_max_events=of_tape_max,
         orderflow_tape_min_total_quote=of_tape_min_q,

@@ -253,7 +253,16 @@ class ScalpingTATrend(ScalpingTAOhlcv):
             return None
         mid = (q.bid + q.ask) / 2.0
         atr_bps = atr / mid * 10_000.0 if mid > 0 else 0.0
+        rsi = blk.get("rsi")
         if pdi > mdi and mid > sma_s:
+            mx_rsi = float(self.settings.ta_trend_max_rsi_long)
+            if mx_rsi > 0 and rsi is not None and float(rsi) > mx_rsi:
+                return None
+            mx_ext = float(self.settings.ta_trend_max_extend_bps_long)
+            if mx_ext > 0 and mid > 0:
+                extend_bps = (mid - sma_s) / mid * 10_000.0
+                if extend_bps > mx_ext:
+                    return None
             imp = max(
                 impulse_bps_mid_to_sma(mid, sma_s) or 0.0,
                 abs(pdi - mdi),
@@ -266,6 +275,14 @@ class ScalpingTATrend(ScalpingTAOhlcv):
                 impulse_bps=float(imp),
             )
         if mdi > pdi and mid < sma_s:
+            mn_rsi = float(self.settings.ta_trend_min_rsi_short)
+            if mn_rsi > 0 and rsi is not None and float(rsi) < mn_rsi:
+                return None
+            mx_ext_s = float(self.settings.ta_trend_max_extend_bps_short)
+            if mx_ext_s > 0 and mid > 0:
+                extend_bps = (sma_s - mid) / mid * 10_000.0
+                if extend_bps > mx_ext_s:
+                    return None
             imp = max(
                 impulse_bps_mid_to_sma(mid, sma_s) or 0.0,
                 abs(pdi - mdi),
