@@ -184,6 +184,9 @@ class Settings:
     orderflow_cooldown_seconds: float
     #: DATA_MODE=ws: подписываться на watch_trades, если orderflow в списке вариантов (или явно в env).
     orderflow_ws_collect: bool
+    #: Только paper: чтобы увидеть полный цикл (fill/exit), можно выставлять лимитки "через спред":
+    #: buy по ask и sell по bid (рыночно-исполняемые лимитки). В live не влияет.
+    auto_trade_paper_cross_spread: bool
 
     def paper_trading_fee_bps(self) -> float:
         """Paper: комиссия одной стороны для лимиток (часто maker < taker). Иначе — ARBITRAGE_FEE_BPS_PER_SIDE."""
@@ -269,6 +272,12 @@ def load_settings() -> Settings:
     )
     auto_trade_arbitrage = os.getenv("AUTO_TRADE_ARBITRAGE", "false").lower() in ("1", "true", "yes", "on")
     auto_trade_min_edge = float(os.getenv("AUTO_TRADE_MIN_EDGE_BPS", "5"))
+    paper_cross = os.getenv("AUTO_TRADE_PAPER_CROSS_SPREAD", "false").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
     scalping_max_slip = float(os.getenv("SCALPING_MAX_SLIPPAGE_BPS", "50"))
     scalping_cancel_prev = os.getenv("SCALPING_CANCEL_PREVIOUS_ORDERS", "true").lower() in (
@@ -761,4 +770,5 @@ def load_settings() -> Settings:
         orderflow_signal_mode=orderflow_signal_mode,
         orderflow_cooldown_seconds=of_cd,
         orderflow_ws_collect=orderflow_ws_collect,
+        auto_trade_paper_cross_spread=paper_cross,
     )

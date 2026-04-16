@@ -1269,9 +1269,17 @@ class ScalpAutoTrader:
                     return
 
         if sig.side == "buy":
-            price = q.bid
+            # Paper debug mode: для демонстрации полного цикла (fill → exit) можно
+            # выставлять лимитку "через спред" (рыночно-исполняемая).
+            if self._s.paper and bool(getattr(self._s, "auto_trade_paper_cross_spread", False)):
+                price = q.ask
+            else:
+                price = q.bid
         else:
-            price = q.ask
+            if self._s.paper and bool(getattr(self._s, "auto_trade_paper_cross_spread", False)):
+                price = q.bid
+            else:
+                price = q.ask
         if price <= 0:
             return
 
