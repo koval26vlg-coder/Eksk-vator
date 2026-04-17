@@ -365,8 +365,8 @@ def load_settings() -> Settings:
 
     auto_tune = os.getenv("AUTO_TRADE_AUTO_TUNE", "false").lower() in ("1", "true", "yes", "on")
     auto_tune_min_rng = float(os.getenv("AUTO_TRADE_AUTO_TUNE_MIN_MID_RANGE_BPS", "0"))
-    auto_tune_rng_mult = float(os.getenv("AUTO_TRADE_AUTO_TUNE_MID_RANGE_MULT", "1.25"))
-    auto_tune_rng_extra = float(os.getenv("AUTO_TRADE_AUTO_TUNE_MID_RANGE_EXTRA_BPS", "2"))
+    auto_tune_rng_mult = float(os.getenv("AUTO_TRADE_AUTO_TUNE_MID_RANGE_MULT", "1.0"))
+    auto_tune_rng_extra = float(os.getenv("AUTO_TRADE_AUTO_TUNE_MID_RANGE_EXTRA_BPS", "1"))
 
     ta_timeframe = os.getenv("TA_TIMEFRAME", "5m").strip()
     ta_ohlcv_limit = int(os.getenv("TA_OHLCV_LIMIT", "120"))
