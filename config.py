@@ -79,7 +79,8 @@ class Settings:
     auto_trade_sl_atr_mult: float
     #: Авто-выход: макс. время удержания позиции (сек); 0 = выкл.
     auto_trade_max_hold_seconds: float
-    #: Авто-выход (paper): при MAX_HOLD закрывать только если pnl_bps >= порога; 0 = без порога.
+    #: Авто-выход (paper): при мягком MAX_HOLD не закрывать «мелкий плюс» (net после fee на выход),
+    #: пока net < порога и net >= 0; при net < 0 таймер всё равно закрывает. 0 = без порога.
     #: Базовое значение; если заданы *_LONG / *_SHORT — для соответствующей стороны берутся они.
     auto_trade_max_hold_min_pnl_bps: float
     #: MIN_PNL для long при MAX_HOLD (пустой env → как auto_trade_max_hold_min_pnl_bps).

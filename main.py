@@ -255,7 +255,8 @@ async def run_loop() -> None:
             )
         if settings.auto_trade_max_hold_seconds > 0:
             log.info(
-                "AUTO_TRADE: MAX_HOLD=%.0fs; min net pnl для таймера — long≥%.1f bps, short≥%.1f bps (0=выкл.); HARD=%.0fs",
+                "AUTO_TRADE: MAX_HOLD=%.0fs; min net для отлож. таймера (только 0≤net<порог) long=%.1f short=%.1f bps; "
+                "net<0 закрываем по таймеру; HARD=%.0fs",
                 settings.auto_trade_max_hold_seconds,
                 settings.auto_trade_max_hold_min_pnl_bps_long,
                 settings.auto_trade_max_hold_min_pnl_bps_short,

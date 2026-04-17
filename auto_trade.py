@@ -433,7 +433,13 @@ class ScalpAutoTrader:
                 age = now_mono - opened
                 if hold_hard > 0 and age >= hold_hard:
                     reason = f"MAX_HOLD_HARD {age:.0f}s≥{hold_hard:.0f}s"
-                elif hold_min_pnl > 0 and pnl_net_bps + 1e-9 < hold_min_pnl:
+                elif (
+                    hold_min_pnl > 0
+                    and pnl_net_bps + 1e-9 < hold_min_pnl
+                    and pnl_net_bps + 1e-9 >= 0.0
+                ):
+                    # MIN_PNL отсекает только «мелкий плюс» (ждём TP). Если net уже минус —
+                    # не держим позицию до SL из‑за порога: закрываем по мягкому MAX_HOLD.
                     if self._exit_skip_log_ok(sym, now_mono):
                         side_tag = "long" if pos > 0 else "short"
                         self._log.info(
