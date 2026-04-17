@@ -413,7 +413,7 @@ def load_settings() -> Settings:
     # ---------------------------------------------------------------------
     if auto_trade and auto_trade_profile in ("quality", "quality-first", "quality_first"):
         # TP should clear exit fee and still leave some net edge.
-        at_tp = 6.0
+        at_tp = 8.0
         # Filter weak signals (noise); for ws ticks 6–12 bps is typical for majors.
         min_impulse_at = 12.0
         # TA trend confirmation: require stronger +DI/-DI separation.
