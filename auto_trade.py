@@ -212,7 +212,8 @@ class ScalpAutoTrader:
         key = (str(exchange_id), str(symbol))
         self._last_mid[key] = float(mid)
         thr_bps = float(getattr(self._s, "scalping_min_mid_range_bps", 0.0) or 0.0)
-        if thr_bps <= 0:
+        auto_tune = bool(getattr(self._s, "auto_trade_auto_tune", False))
+        if thr_bps <= 0 and not auto_tune:
             return
         win_s = float(getattr(self._s, "scalping_min_mid_range_window_seconds", 30.0) or 30.0)
         if win_s <= 0:
@@ -230,7 +231,8 @@ class ScalpAutoTrader:
     def _mid_range_bps(self, exchange_id: str, symbol: str, mid_ref: float, now_mono: float) -> float | None:
         """Диапазон (max-min) mid за окно в bps относительно mid_ref. None, если данных мало/выключено."""
         thr_bps = float(getattr(self._s, "scalping_min_mid_range_bps", 0.0) or 0.0)
-        if thr_bps <= 0:
+        auto_tune = bool(getattr(self._s, "auto_trade_auto_tune", False))
+        if thr_bps <= 0 and not auto_tune:
             return None
         win_s = float(getattr(self._s, "scalping_min_mid_range_window_seconds", 30.0) or 30.0)
         if win_s <= 0:
@@ -1103,14 +1105,31 @@ class ScalpAutoTrader:
             return
 
         # Quiet-market guard: если рынок «тихий» (диапазон mid за окно слишком мал), не открываем новые входы.
-        # Идея: когда range в окне < ~2×fee, вероятность TP перекрыть round-trip fee мала → больше MAX_HOLD_HARD/SL.
-        thr_range = float(getattr(self._s, "scalping_min_mid_range_bps", 0.0) or 0.0)
+        #
+        # AUTO_TUNE: если включено, порог рассчитывается автоматически от fee/TP (и может работать даже при
+        # SCALPING_MIN_MID_RANGE_BPS=0), чтобы не входить в режим «TP почти недостижим → MAX_HOLD/SL».
+        thr_range_user = float(getattr(self._s, "scalping_min_mid_range_bps", 0.0) or 0.0)
+        auto_tune = bool(getattr(self._s, "auto_trade_auto_tune", False))
+        thr_range = thr_range_user
+        if auto_tune:
+            fee_side_bps = float(self._s.paper_trading_fee_bps() if self._s.paper else self._s.fee_bps_per_side)
+            tp_net = float(self._s.auto_trade_tp_bps)
+            # Чтобы взять TP net=tp_net, нужно raw >= tp_net + fee_side_bps (комиссия на выход).
+            # Если TP выключен — хотя бы «круг» комиссий (round-trip) должен быть достижим.
+            required_raw = max(2.0 * fee_side_bps, (tp_net + fee_side_bps) if tp_net > 0 else 0.0)
+            mult = float(getattr(self._s, "auto_trade_auto_tune_mid_range_mult", 1.25) or 1.25)
+            extra = float(getattr(self._s, "auto_trade_auto_tune_mid_range_extra_bps", 2.0) or 2.0)
+            min_rng = float(getattr(self._s, "auto_trade_auto_tune_min_mid_range_bps", 0.0) or 0.0)
+            thr_auto = max(min_rng, required_raw * mult + extra)
+            thr_range = max(thr_range, thr_auto)
+
         if thr_range > 0:
             now = time.monotonic()
             mid_now = (q.bid + q.ask) / 2.0
             rng = self._mid_range_bps(exchange_id, q.symbol, mid_now, now)
             if rng is None:
-                self._ana_inc("quiet_market_warmup", exchange_id, q.symbol)
+                warm_key = "quiet_market_warmup_auto" if auto_tune and thr_range_user <= 0 else "quiet_market_warmup"
+                self._ana_inc(warm_key, exchange_id, q.symbol)
                 # warmup: пока нет окна mid — лучше не входить, иначе фильтр «тихий рынок» не работает на старте.
                 if self._quiet_skip_log_ok(exchange_id, q.symbol, now):
                     win_s = float(getattr(self._s, "scalping_min_mid_range_window_seconds", 30.0) or 30.0)
@@ -1127,19 +1146,31 @@ class ScalpAutoTrader:
                     )
                 return
             if rng + 1e-9 < thr_range:
-                self._ana_inc("quiet_market_flat", exchange_id, q.symbol)
+                flat_key = "quiet_market_flat_auto" if auto_tune and thr_range_user <= 0 else "quiet_market_flat"
+                self._ana_inc(flat_key, exchange_id, q.symbol)
                 if self._quiet_skip_log_ok(exchange_id, q.symbol, now):
                     win_s = float(getattr(self._s, "scalping_min_mid_range_window_seconds", 30.0) or 30.0)
-                    self._log.info(
-                        "auto_trade: quiet-market — range(mid)≈%.1f bps за скользящие %.0fs < "
-                        "SCALPING_MIN_MID_RANGE_BPS=%.1f: вход не открываем (рынок «плоский» по этому критерию). "
-                        "Если часто режет на чуть меньшем range — понизьте порог или поставьте 0 (выкл.). (%s %s)",
-                        rng,
-                        win_s,
-                        thr_range,
-                        q.symbol,
-                        exchange_id,
-                    )
+                    if auto_tune and thr_range_user <= 0:
+                        self._log.info(
+                            "auto_trade: auto-tune quiet-market — range(mid)≈%.1f bps за скользящие %.0fs < "
+                            "thr≈%.1f (auto): вход не открываем. (%s %s)",
+                            rng,
+                            win_s,
+                            thr_range,
+                            q.symbol,
+                            exchange_id,
+                        )
+                    else:
+                        self._log.info(
+                            "auto_trade: quiet-market — range(mid)≈%.1f bps за скользящие %.0fs < "
+                            "SCALPING_MIN_MID_RANGE_BPS=%.1f: вход не открываем (рынок «плоский» по этому критерию). "
+                            "Если часто режет на чуть меньшем range — понизьте порог или поставьте 0 (выкл.). (%s %s)",
+                            rng,
+                            win_s,
+                            thr_range,
+                            q.symbol,
+                            exchange_id,
+                        )
                 return
 
         min_imp = float(self._s.scalping_auto_trade_min_impulse_bps)

@@ -91,6 +91,14 @@ class Settings:
     auto_trade_max_hold_hard_seconds: float
     #: Авто-выход (paper): разрешить TP даже если есть pending-ордера по symbol (обычно лучше false).
     auto_trade_tp_allow_with_pending: bool
+    #: AUTO_TUNE: авто‑подстройка входов под комиссии/TP (в основном — «тихий рынок»).
+    auto_trade_auto_tune: bool
+    #: AUTO_TUNE: минимальный range(mid) (bps) для входа. 0 = только авто‑расчёт от fee/TP.
+    auto_trade_auto_tune_min_mid_range_bps: float
+    #: AUTO_TUNE: множитель к авто‑порогу range(mid). Больше = реже входы, меньше просадок во флэте.
+    auto_trade_auto_tune_mid_range_mult: float
+    #: AUTO_TUNE: прибавка (bps) к авто‑порогу range(mid) как небольшой «зазор».
+    auto_trade_auto_tune_mid_range_extra_bps: float
     auto_trade_arbitrage: bool
     auto_trade_min_edge_bps: float
     api_key: str | None
@@ -354,6 +362,11 @@ def load_settings() -> Settings:
     min_impulse_at = float(os.getenv("SCALPING_AUTO_TRADE_MIN_IMPULSE_BPS", "0"))
     min_mid_range_bps = float(os.getenv("SCALPING_MIN_MID_RANGE_BPS", "0"))
     min_mid_range_win = float(os.getenv("SCALPING_MIN_MID_RANGE_WINDOW_SECONDS", "30"))
+
+    auto_tune = os.getenv("AUTO_TRADE_AUTO_TUNE", "false").lower() in ("1", "true", "yes", "on")
+    auto_tune_min_rng = float(os.getenv("AUTO_TRADE_AUTO_TUNE_MIN_MID_RANGE_BPS", "0"))
+    auto_tune_rng_mult = float(os.getenv("AUTO_TRADE_AUTO_TUNE_MID_RANGE_MULT", "1.25"))
+    auto_tune_rng_extra = float(os.getenv("AUTO_TRADE_AUTO_TUNE_MID_RANGE_EXTRA_BPS", "2"))
 
     ta_timeframe = os.getenv("TA_TIMEFRAME", "5m").strip()
     ta_ohlcv_limit = int(os.getenv("TA_OHLCV_LIMIT", "120"))
@@ -619,6 +632,12 @@ def load_settings() -> Settings:
         raise ValueError("SCALPING_MIN_MID_RANGE_BPS должен быть >= 0 (0 — выкл.)")
     if min_mid_range_win <= 0:
         raise ValueError("SCALPING_MIN_MID_RANGE_WINDOW_SECONDS должен быть > 0")
+    if auto_tune_min_rng < 0:
+        raise ValueError("AUTO_TRADE_AUTO_TUNE_MIN_MID_RANGE_BPS должен быть >= 0")
+    if auto_tune_rng_mult <= 0:
+        raise ValueError("AUTO_TRADE_AUTO_TUNE_MID_RANGE_MULT должен быть > 0")
+    if auto_tune_rng_extra < 0:
+        raise ValueError("AUTO_TRADE_AUTO_TUNE_MID_RANGE_EXTRA_BPS должен быть >= 0")
 
     cap_max_loss = float(os.getenv("CAPITAL_MAX_SESSION_LOSS_QUOTE", "0"))
     cap_cd = float(os.getenv("CAPITAL_COOLDOWN_AFTER_LOSS_SECONDS", "0"))
@@ -720,6 +739,10 @@ def load_settings() -> Settings:
         auto_trade_max_hold_min_pnl_bps_short=at_hold_min_pnl_short,
         auto_trade_max_hold_hard_seconds=at_hold_hard,
         auto_trade_tp_allow_with_pending=at_tp_allow_pending,
+        auto_trade_auto_tune=auto_tune,
+        auto_trade_auto_tune_min_mid_range_bps=auto_tune_min_rng,
+        auto_trade_auto_tune_mid_range_mult=auto_tune_rng_mult,
+        auto_trade_auto_tune_mid_range_extra_bps=auto_tune_rng_extra,
         auto_trade_arbitrage=auto_trade_arbitrage,
         auto_trade_min_edge_bps=auto_trade_min_edge,
         api_key=api_key,

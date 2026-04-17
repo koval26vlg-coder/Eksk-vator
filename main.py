@@ -262,6 +262,14 @@ async def run_loop() -> None:
                 settings.auto_trade_max_hold_min_pnl_bps_short,
                 settings.auto_trade_max_hold_hard_seconds,
             )
+        if settings.auto_trade_auto_tune:
+            log.info(
+                "AUTO_TRADE: AUTO_TUNE=true — quiet-market порог auto: min_mid_range≥%.1f bps; mult=%.2f extra=%.1f "
+                "(плюс SCALPING_MIN_MID_RANGE_BPS, если задан)",
+                settings.auto_trade_auto_tune_min_mid_range_bps,
+                settings.auto_trade_auto_tune_mid_range_mult,
+                settings.auto_trade_auto_tune_mid_range_extra_bps,
+            )
     if settings.auto_trade and settings.strategy == "scalping":
         streams = len(settings.exchanges) * len(settings.symbols)
         if settings.risk_strict_risk_limits and settings.risk_max_open_orders < streams:
