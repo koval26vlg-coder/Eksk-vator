@@ -422,7 +422,8 @@ def load_settings() -> Settings:
         atr_not_ref = 20.0
         atr_not_floor = 0.25
         # Re-introduce soft hold with a profitability threshold; keep hard hold disabled.
-        at_hold = 180.0
+        # 600s: give trend time to reach TP (quality TP is wider than a 3–4m scalp window).
+        at_hold = 600.0
         at_hold_min_pnl = 3.0
         at_hold_min_pnl_long = at_hold_min_pnl
         at_hold_min_pnl_short = at_hold_min_pnl
