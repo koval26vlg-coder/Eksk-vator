@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Снимок контекста для чата с ИИ: последние коммиты, remote (для Issues/PR), свежие логи.
+Снимок контекста для чата с ИИ: git, remote, логи, хвост HANDOFF.md.
 Запуск из корня репозитория: python scripts/context_snapshot.py
 """
 
@@ -60,20 +60,34 @@ def main() -> int:
     print("\n### Каталог logs/ (до 12 последних по времени изменения)\n")
     log_dir = root / "logs"
     if not log_dir.is_dir():
-        print("_Каталог `logs/` ещё не создан — запустите бота хотя бы раз._\n")
-        print(f"Абсолютный путь к логам после первого запуска: `{log_dir}`\n")
-        return 0
+        print("_Каталог `logs/` ещё не создан — запустите бота хотя бы раз._")
+        print(f"Абсолютный путь после первого запуска: `{log_dir}`\n")
+    else:
+        paths = sorted(log_dir.glob("run-*.log"), key=lambda p: p.stat().st_mtime, reverse=True)[:12]
+        if not paths:
+            print("_Нет файлов `run-*.log`._\n")
+        else:
+            for p in paths:
+                st = p.stat()
+                ts = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                print(f"- `{p.name}` — {st.st_size} bytes, изменён {ts}")
+                print(f"  Полный путь: `{p.resolve()}`")
+            print()
 
-    paths = sorted(log_dir.glob("run-*.log"), key=lambda p: p.stat().st_mtime, reverse=True)[:12]
-    if not paths:
-        print("_Нет файлов `run-*.log`._\n")
+    print("### HANDOFF.md (последние 50 строк)\n")
+    handoff = root / "HANDOFF.md"
+    if not handoff.is_file():
+        print("_Файл `HANDOFF.md` не найден в корне репозитория._\n")
         return 0
-
-    for p in paths:
-        st = p.stat()
-        ts = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-        print(f"- `{p.name}` — {st.st_size} bytes, изменён {ts}")
-        print(f"  Полный путь: `{p.resolve()}`")
+    try:
+        text = handoff.read_text(encoding="utf-8")
+    except OSError as e:
+        print(f"(не удалось прочитать HANDOFF.md: {e})\n")
+        return 0
+    lines = text.splitlines()
+    tail = lines[-50:] if len(lines) > 50 else lines
+    print(f"_Источник: `{handoff.resolve()}` ({len(lines)} строк, ниже хвост ≤50)_\n")
+    print("\n".join(tail))
     print()
     return 0
 

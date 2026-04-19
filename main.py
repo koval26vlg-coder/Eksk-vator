@@ -573,6 +573,9 @@ def main() -> None:
         "Файл лога этой сессии (весь вывод дублируется с консоли): %s",
         log_path.resolve(),
     )
+    logging.getLogger("arbitrage").info(
+        "Краткие решения «не делать X» между сессиями — в корневом HANDOFF.md (в git); сводка для чата: python scripts/context_snapshot.py"
+    )
     try:
         run_seconds_raw = os.getenv("RUN_SECONDS", "").strip()
         if run_seconds_raw:
