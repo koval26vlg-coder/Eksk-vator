@@ -131,6 +131,33 @@ def vwap_buy_with_quote(asks: list | None, quote_budget: float) -> tuple[float, 
     return total_base, vwap, spent, complete
 
 
+def vwap_buy_base(asks: list | None, base_amount: float) -> tuple[float, float, float, bool]:
+    """Покупка base_amount по уровням ask: (quote_spent, vwap, base_bought, полностью уместилось)."""
+    if not asks or base_amount <= 0:
+        return 0.0, 0.0, 0.0, False
+    remaining = base_amount
+    spent = 0.0
+    bought = 0.0
+    for row in asks:
+        if remaining <= 0:
+            break
+        if len(row) < 2:
+            continue
+        price = float(row[0])
+        qty = float(row[1])
+        if price <= 0 or qty <= 0:
+            continue
+        take_base = min(remaining, qty)
+        spent += take_base * price
+        bought += take_base
+        remaining -= take_base
+    if bought <= 0:
+        return 0.0, 0.0, 0.0, False
+    complete = remaining <= max(1e-12, base_amount * 1e-12)
+    vwap = spent / bought
+    return spent, vwap, bought, complete
+
+
 def vwap_sell_base(bids: list | None, base_amount: float) -> tuple[float, float, float, bool]:
     """Продажа base_amount по уровням bid: (quote, vwap, base_sold, полностью уместилось)."""
     if not bids or base_amount <= 0:

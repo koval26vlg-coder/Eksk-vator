@@ -16,6 +16,7 @@ from orderbook import (
     simulated_slippage_bps_buy,
     simulated_slippage_bps_sell,
     spread_bps,
+    vwap_buy_base,
     vwap_buy_with_quote,
     vwap_sell_base,
 )
@@ -295,6 +296,36 @@ class ScalpAutoTrader:
             return False
         return abs(pos_base) * float(mid) < thr
 
+    def _book_full_exit_net_ge_tp(
+        self,
+        pos: float,
+        entry: float,
+        amount: float,
+        order_book: dict,
+        tp_net: float,
+        fee_exit_bps: float,
+    ) -> bool:
+        """True, если полный объём можно закрыть по стакану с VWAP так, что net (raw−exit_fee) ≥ tp_net.
+
+        Используется для откладывания мягкого MAX_HOLD: пока глубина ещё позволяет «плюс» как у TP-логики.
+        """
+        if amount <= 0 or entry <= 0 or tp_net <= 0:
+            return False
+        bids = order_book.get("bids") or []
+        asks = order_book.get("asks") or []
+        if pos > 0:
+            _quote, vwap, sold, complete = vwap_sell_base(bids, amount)
+            if not complete or sold + 1e-12 < amount:
+                return False
+            raw_bps = (float(vwap) / float(entry) - 1.0) * 10_000.0
+        else:
+            _spent, vwap, bought, complete = vwap_buy_base(asks, amount)
+            if not complete or bought + 1e-12 < amount:
+                return False
+            raw_bps = (float(entry) / float(vwap) - 1.0) * 10_000.0
+        net_bps = raw_bps - float(fee_exit_bps)
+        return net_bps + 1e-9 >= float(tp_net)
+
     def _has_pending_for_symbol(self, symbol: str) -> bool:
         sym = str(symbol)
         for (_ex, s), ids in self._pending_order_ids.items():
@@ -475,6 +506,30 @@ class ScalpAutoTrader:
                         # иначе на WS будет десятки тысяч инкрементов/сессию и отчёт потеряет смысл.
                         self._ana_inc("exit_max_hold_min_pnl_skip", exchange_id, sym)
                 else:
+                    gate = bool(getattr(self._s, "auto_trade_max_hold_book_tp_gate", False))
+                    stale_cap = float(
+                        getattr(self._s, "auto_trade_max_hold_book_tp_stale_seconds", 0.0) or 0.0
+                    )
+                    if (
+                        gate
+                        and tp > 0
+                        and isinstance(order_book, dict)
+                        and order_book
+                        and (stale_cap <= 0.0 or age < stale_cap)
+                    ):
+                        if self._book_full_exit_net_ge_tp(
+                            pos, float(entry), abs(pos), order_book, tp, fee_side_bps
+                        ):
+                            if self._exit_skip_log_ok(sym, now_mono):
+                                self._log.info(
+                                    "auto_trade: exit %s — пропуск MAX_HOLD: по стакану полный выход по VWAP "
+                                    "ещё даёт net≥%.1f bps (TP); ждём исполнение/исчерпание глубины. age≈%.0fs",
+                                    sym,
+                                    tp,
+                                    age,
+                                )
+                            self._ana_inc("exit_max_hold_defer_book_tp", exchange_id, sym)
+                            return
                     reason = f"MAX_HOLD {age:.0f}s≥{hold:.0f}s"
 
         if reason is None:

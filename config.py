@@ -91,6 +91,10 @@ class Settings:
     auto_trade_max_hold_min_pnl_bps_short: float
     #: Авто-выход (paper): "жёсткий" MAX_HOLD — закрыть позицию при достижении времени, независимо от pnl/min_pnl. 0 = выкл.
     auto_trade_max_hold_hard_seconds: float
+    #: Paper: мягкий MAX_HOLD не закрывать, пока полный выход по стакану (VWAP) всё ещё даёт net≥TP (глубина «под плюс»).
+    auto_trade_max_hold_book_tp_gate: bool
+    #: Paper: при включённом gate — не откладывать дольше этого возраста позиции (сек); 0 = без потолка (риск «вечного» ожидания).
+    auto_trade_max_hold_book_tp_stale_seconds: float
     #: Авто-выход (paper): разрешить TP даже если есть pending-ордера по symbol (обычно лучше false).
     auto_trade_tp_allow_with_pending: bool
     #: AUTO_TUNE: авто‑подстройка входов под комиссии/TP (в основном — «тихий рынок»).
@@ -287,6 +291,14 @@ def load_settings() -> Settings:
     at_hold_min_pnl_long = float(_hml_raw) if _hml_raw else at_hold_min_pnl
     at_hold_min_pnl_short = float(_hms_raw) if _hms_raw else at_hold_min_pnl
     at_hold_hard = float(os.getenv("AUTO_TRADE_MAX_HOLD_HARD_SECONDS", "0"))
+    at_hold_book_tp_gate = os.getenv("AUTO_TRADE_MAX_HOLD_BOOK_TP_GATE", "false").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    _raw_hold_book_stale = os.getenv("AUTO_TRADE_MAX_HOLD_BOOK_TP_STALE_SECONDS", "0").strip()
+    at_hold_book_tp_stale = float(_raw_hold_book_stale) if _raw_hold_book_stale else 0.0
     at_sl_atr_mult = float(os.getenv("AUTO_TRADE_SL_ATR_MULT", "0"))
     at_tp_allow_pending = os.getenv("AUTO_TRADE_TP_ALLOW_WITH_PENDING", "false").lower() in (
         "1",
@@ -446,6 +458,9 @@ def load_settings() -> Settings:
         at_hold_min_pnl_long = at_hold_min_pnl
         at_hold_min_pnl_short = at_hold_min_pnl
         at_hold_hard = 0.0
+        # Мягкий MAX_HOLD: не закрывать по таймеру, пока по стакану полный выход ещё «под TP»; потолок по возрасту — чтобы не ждать вечно.
+        at_hold_book_tp_gate = True
+        at_hold_book_tp_stale = 14400.0
         # One paper position across symbols — avoids simultaneous BTC+ETH longs both dying on timer.
         auto_trade_single_open = True
         # If SL is enabled in env, widen slightly vs typical 50 bps noise; with SL on, ATR mult adds room in volatile tape.
@@ -641,6 +656,8 @@ def load_settings() -> Settings:
         )
     if at_hold_hard < 0:
         raise ValueError("AUTO_TRADE_MAX_HOLD_HARD_SECONDS должен быть >= 0 (0 — выкл.)")
+    if at_hold_book_tp_stale < 0:
+        raise ValueError("AUTO_TRADE_MAX_HOLD_BOOK_TP_STALE_SECONDS должен быть >= 0 (0 — без потолка)")
     if pos_dust_quote < 0:
         raise ValueError("AUTO_TRADE_POSITION_DUST_QUOTE должен быть >= 0 (0 — выкл.)")
     if auto_trade_arbitrage and not auto_trade:
@@ -778,6 +795,8 @@ def load_settings() -> Settings:
         auto_trade_max_hold_min_pnl_bps_long=at_hold_min_pnl_long,
         auto_trade_max_hold_min_pnl_bps_short=at_hold_min_pnl_short,
         auto_trade_max_hold_hard_seconds=at_hold_hard,
+        auto_trade_max_hold_book_tp_gate=at_hold_book_tp_gate,
+        auto_trade_max_hold_book_tp_stale_seconds=at_hold_book_tp_stale,
         auto_trade_tp_allow_with_pending=at_tp_allow_pending,
         auto_trade_auto_tune=auto_tune,
         auto_trade_auto_tune_min_mid_range_bps=auto_tune_min_rng,
