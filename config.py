@@ -69,6 +69,8 @@ class Settings:
     auto_trade_reduce_only: bool
     #: Reduce-only область: exchange_symbol/leg (по бирже+паре) или symbol (глобально по паре на всех биржах).
     auto_trade_reduce_only_scope: str
+    #: Paper: не открывать новую пару, пока по другой паре уже есть не-пылевая позиция (снижает скоррелированные дубли BTC+ETH).
+    auto_trade_single_open_position: bool
     #: Reduce-only/exit: считать позицию "пылью", если |pos_base|×mid < порога (в quote, напр. USDT). 0 = выкл.
     auto_trade_position_dust_quote: float
     #: Авто-выход: take-profit в bps от цены входа; 0 = выкл.
@@ -269,6 +271,12 @@ def load_settings() -> Settings:
         auto_trade_ro_scope = "exchange_symbol"
     else:
         raise ValueError("AUTO_TRADE_REDUCE_ONLY_SCOPE: symbol | exchange_symbol | leg")
+    auto_trade_single_open = os.getenv("AUTO_TRADE_SINGLE_OPEN_POSITION", "false").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
     pos_dust_quote = float(os.getenv("AUTO_TRADE_POSITION_DUST_QUOTE", "0"))
     at_tp = float(os.getenv("AUTO_TRADE_TP_BPS", "0"))
     at_sl = float(os.getenv("AUTO_TRADE_SL_BPS", "0"))
@@ -432,13 +440,20 @@ def load_settings() -> Settings:
         # ATR→notional: shrink exposure when ATR is high; keep a small floor.
         atr_not_ref = 20.0
         atr_not_floor = 0.25
-        # Re-introduce soft hold with a profitability threshold; keep hard hold disabled.
-        # 600s: give trend time to reach TP (quality TP is wider than a 3–4m scalp window).
-        at_hold = 600.0
+        # Longer hold: ta_trend + TP net 8 bps often need more than 10m; user OK to wait for a winning exit.
+        at_hold = 1800.0
         at_hold_min_pnl = 3.0
         at_hold_min_pnl_long = at_hold_min_pnl
         at_hold_min_pnl_short = at_hold_min_pnl
         at_hold_hard = 0.0
+        # One paper position across symbols — avoids simultaneous BTC+ETH longs both dying on timer.
+        auto_trade_single_open = True
+        # If SL is enabled in env, widen slightly vs typical 50 bps noise; with SL on, ATR mult adds room in volatile tape.
+        if at_sl > 1e-9:
+            at_sl = max(at_sl, 62.0)
+            at_sl_atr_mult = max(at_sl_atr_mult, 1.25)
+        elif at_sl_atr_mult > 1e-9:
+            at_sl_atr_mult = max(at_sl_atr_mult, 1.25)
         # Fewer re-entries after a fill / timer exit (env can set higher).
         auto_trade_cooldown = max(auto_trade_cooldown, 45.0)
         # AUTO_TUNE quiet-market threshold: slightly above default mix so flat tape skips more often.
@@ -753,6 +768,7 @@ def load_settings() -> Settings:
         auto_trade_max_open_orders=auto_trade_max_open,
         auto_trade_reduce_only=auto_trade_reduce_only,
         auto_trade_reduce_only_scope=auto_trade_ro_scope,
+        auto_trade_single_open_position=auto_trade_single_open,
         auto_trade_position_dust_quote=pos_dust_quote,
         auto_trade_tp_bps=at_tp,
         auto_trade_sl_bps=at_sl,

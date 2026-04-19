@@ -279,6 +279,11 @@ async def run_loop() -> None:
                 "AUTO_TRADE: reduce-only (%s)",
                 "глобально по паре (все биржи)" if settings.auto_trade_reduce_only_scope == "symbol" else "по бирже+паре",
             )
+        if settings.strategy == "scalping" and settings.auto_trade_single_open_position:
+            log.info(
+                "AUTO_TRADE: single-open (paper) — не открываем новую пару, пока по другой есть позиция "
+                "(AUTO_TRADE_SINGLE_OPEN_POSITION; в профиле quality включено по умолчанию)"
+            )
         if settings.auto_trade_max_hold_seconds > 0:
             log.info(
                 "AUTO_TRADE: MAX_HOLD=%.0fs; min net для отлож. таймера (только 0≤net<порог) long=%.1f short=%.1f bps; "

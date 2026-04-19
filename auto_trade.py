@@ -106,6 +106,8 @@ class ScalpAutoTrader:
         self._last_mid: dict[tuple[str, str], float] = {}
         # Чтобы не спамить "quiet guard" на каждом сигнале.
         self._quiet_skip_log_mono: dict[tuple[str, str], float] = {}
+        # Троттлинг для прочих «входных» guard-логов (single-open и т.п.).
+        self._entry_skip_log_mono: dict[tuple[str, str, str], float] = {}
         self._ana = _AutoTradeAnalytics() if bool(getattr(settings, "paper", False)) else None
 
     def paper_session_report_lines(self) -> list[str] | None:
@@ -204,6 +206,22 @@ class ScalpAutoTrader:
         if now_mono - prev < throttle_s:
             return False
         self._quiet_skip_log_mono[key] = now_mono
+        return True
+
+    def _entry_skip_log_ok(
+        self,
+        tag: str,
+        exchange_id: str,
+        symbol: str,
+        now_mono: float,
+        *,
+        throttle_s: float = 45.0,
+    ) -> bool:
+        key = (str(tag), str(exchange_id), str(symbol))
+        prev = float(self._entry_skip_log_mono.get(key, 0.0))
+        if now_mono - prev < throttle_s:
+            return False
+        self._entry_skip_log_mono[key] = now_mono
         return True
 
     def _record_mid(self, exchange_id: str, symbol: str, mid: float, now_mono: float) -> None:
@@ -1237,6 +1255,7 @@ class ScalpAutoTrader:
                 return
 
         mid = (q.bid + q.ask) / 2.0
+        self._record_mid(exchange_id, q.symbol, mid, time.monotonic())
         # Reduce-only (по смыслу): если по паре уже есть позиция — не наращиваем, а только уменьшаем её.
         if self._s.auto_trade_reduce_only:
             if self._s.auto_trade_reduce_only_scope == "symbol":
@@ -1260,6 +1279,31 @@ class ScalpAutoTrader:
                             need_side,
                         )
                         return
+
+        # Paper: одна не-пылевая позиция на все пары — не открываем вторую (см. AUTO_TRADE_SINGLE_OPEN_POSITION / quality).
+        if self._s.paper and bool(getattr(self._s, "auto_trade_single_open_position", False)):
+            nowm = time.monotonic()
+            for ex, sym, o_pos, o_entry in self._ex.paper_open_positions() or []:
+                if ex == exchange_id and sym == q.symbol:
+                    continue
+                ref_mid = float(self._last_mid.get((str(ex), str(sym)), 0.0) or 0.0)
+                if ref_mid <= 0 and o_entry and float(o_entry) > 0:
+                    ref_mid = float(o_entry)
+                if abs(o_pos) <= 1e-12:
+                    continue
+                if ref_mid > 0 and self._pos_is_dust(o_pos, ref_mid):
+                    continue
+                self._ana_inc("single_open_position", exchange_id, q.symbol)
+                if self._entry_skip_log_ok("single_open", exchange_id, q.symbol, nowm):
+                    self._log.info(
+                        "auto_trade: single-open — уже есть позиция %s %s (pos≈%.8f), новый вход %s %s пропускаем",
+                        sym,
+                        ex,
+                        o_pos,
+                        q.symbol,
+                        exchange_id,
+                    )
+                return
 
         if self._s.scalping_cancel_previous_orders:
             await self._cancel_pending(exchange_id, q.symbol)
