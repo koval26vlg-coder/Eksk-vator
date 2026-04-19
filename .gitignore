@@ -5,6 +5,9 @@ __pycache__/
 .venv/
 venv/
 
+# Логи запусков бота (python main.py)
+logs/
+
 # Локальные данные MCP (SQLite, knowledge graph memory)
 .mcp_data/
 

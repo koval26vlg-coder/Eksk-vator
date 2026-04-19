@@ -11,6 +11,8 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime
+from pathlib import Path
 
 from auto_trade import ArbAutoTrader, ScalpAutoTrader
 from config import Settings, load_settings
@@ -25,6 +27,9 @@ from ws_stream import run_arbitrage_ws, run_scalping_ws
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
+# Путь к файлу лога текущего запуска (после setup_logging).
+SESSION_LOG_FILE: Path | None = None
+
 
 def _atr_bps_provider_from_engine(engine: object):
     """Для AUTO_TRADE: ATR (bps) с TA-движка, если есть get_last_atr_bps."""
@@ -38,8 +43,29 @@ def _atr_bps_provider_from_engine(engine: object):
     return _f
 
 
-def setup_logging() -> None:
-    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stdout)
+def setup_logging() -> Path:
+    """INFO в консоль и в файл в каталоге logs/ (один файл на запуск процесса)."""
+    global SESSION_LOG_FILE
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    formatter = logging.Formatter(LOG_FORMAT)
+
+    if not any(
+        isinstance(h, logging.StreamHandler) and getattr(h, "stream", None) is sys.stdout
+        for h in root.handlers
+    ):
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setFormatter(formatter)
+        root.addHandler(sh)
+
+    log_dir = Path(__file__).resolve().parent / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+    fh = logging.FileHandler(log_path, encoding="utf-8")
+    fh.setFormatter(formatter)
+    root.addHandler(fh)
+    SESSION_LOG_FILE = log_path
+    return log_path
 
 
 async def run_arbitrage_loop(
@@ -542,7 +568,11 @@ async def run_loop() -> None:
 
 
 def main() -> None:
-    setup_logging()
+    log_path = setup_logging()
+    logging.getLogger("arbitrage").info(
+        "Файл лога этой сессии (весь вывод дублируется с консоли): %s",
+        log_path.resolve(),
+    )
     try:
         run_seconds_raw = os.getenv("RUN_SECONDS", "").strip()
         if run_seconds_raw:
