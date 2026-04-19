@@ -424,9 +424,11 @@ def load_settings() -> Settings:
         # TP should clear exit fee and still leave some net edge.
         at_tp = 8.0
         # Filter weak signals (noise); for ws ticks 6–12 bps is typical for majors.
-        min_impulse_at = 12.0
+        min_impulse_at = 14.0
         # TA trend confirmation: require stronger +DI/-DI separation.
         ta_min_di = 8.0
+        # Skip entries when bid/ask is wide vs ATR (often worse edge for limit scalps).
+        atr_spread_m = 0.28
         # ATR→notional: shrink exposure when ATR is high; keep a small floor.
         atr_not_ref = 20.0
         atr_not_floor = 0.25

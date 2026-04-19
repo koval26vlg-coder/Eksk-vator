@@ -67,3 +67,12 @@
 **Issues vs Discussions:** *Issues* — задачи и баги (закрытие по PR). *Discussions* — свободный формат (Q&A, выбор подхода). Метки вроде `context`, `auto-trade`, `paper` упрощают фильтр.
 
 Имеет смысл: **осмысленные коммиты**; при откате — «почему» в сообщении коммита/PR; при важном решении — **строка в `HANDOFF.md`** и при необходимости **issue + ссылка**.
+
+### 6. Качество сделок (paper / `AUTO_TRADE_PROFILE=quality`)
+
+Цель — **меньше случайных входов** и **выходы ближе к TP**, а не к SL / таймеру. Делайте **одно изменение за итерацию**, сравнивайте логи до/после.
+
+1. **После прогона** — в конце сессии смотрите блок **AutoTrade-отчёт**: топ причин `skip` (например `quiet_market_flat_auto`, `min_impulse`, `atr_spread_filter`) и итог закрытых сделок. Прикрепите `logs/run-*.log` при разборе с ИИ.
+2. **Вход** — в `.env` / профиле `quality` в `config.py`: `SCALPING_AUTO_TRADE_MIN_IMPULSE_BPS`, `TA_TREND_MIN_DI_DIFF`, `AUTO_TRADE_ATR_MAX_SPREAD_MULT`, параметры **AUTO_TUNE** (`AUTO_TRADE_AUTO_TUNE_*`), при необходимости `SCALPING_MIN_MID_RANGE_BPS` поверх авто-порога.
+3. **Выход** — `AUTO_TRADE_TP_BPS` / net после `PAPER_FEE_BPS_PER_SIDE`, `AUTO_TRADE_SL_BPS` и при волатильности **`AUTO_TRADE_SL_ATR_MULT`**, мягкий **`AUTO_TRADE_MAX_HOLD_SECONDS`** и **`AUTO_TRADE_MAX_HOLD_MIN_PNL_BPS`** (не держать убыточное из‑за порога — см. логику в коде).
+4. **Зафиксируйте вывод** — если меняете «философию» фильтров (например «TP=8 net, не опускаем импульс ниже N»), одна строка в **`HANDOFF.md`**, чтобы не спорить с прошлым собой вслепую.
