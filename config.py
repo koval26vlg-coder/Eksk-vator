@@ -79,7 +79,8 @@ class Settings:
     auto_trade_sl_atr_mult: float
     #: Авто-выход: макс. время удержания позиции (сек); 0 = выкл.
     auto_trade_max_hold_seconds: float
-    #: Авто-выход (paper): при MAX_HOLD закрывать только если pnl_bps >= порога; 0 = без порога.
+    #: Авто-выход (paper): при мягком MAX_HOLD не закрывать «мелкий плюс» (net после fee на выход),
+    #: пока net < порога и net >= 0; при net < 0 таймер всё равно закрывает. 0 = без порога.
     #: Базовое значение; если заданы *_LONG / *_SHORT — для соответствующей стороны берутся они.
     auto_trade_max_hold_min_pnl_bps: float
     #: MIN_PNL для long при MAX_HOLD (пустой env → как auto_trade_max_hold_min_pnl_bps).
@@ -90,6 +91,14 @@ class Settings:
     auto_trade_max_hold_hard_seconds: float
     #: Авто-выход (paper): разрешить TP даже если есть pending-ордера по symbol (обычно лучше false).
     auto_trade_tp_allow_with_pending: bool
+    #: AUTO_TUNE: авто‑подстройка входов под комиссии/TP (в основном — «тихий рынок»).
+    auto_trade_auto_tune: bool
+    #: AUTO_TUNE: минимальный range(mid) (bps) для входа. 0 = только авто‑расчёт от fee/TP.
+    auto_trade_auto_tune_min_mid_range_bps: float
+    #: AUTO_TUNE: множитель к авто‑порогу range(mid). Больше = реже входы, меньше просадок во флэте.
+    auto_trade_auto_tune_mid_range_mult: float
+    #: AUTO_TUNE: прибавка (bps) к авто‑порогу range(mid) как небольшой «зазор».
+    auto_trade_auto_tune_mid_range_extra_bps: float
     auto_trade_arbitrage: bool
     auto_trade_min_edge_bps: float
     api_key: str | None
@@ -184,6 +193,9 @@ class Settings:
     orderflow_cooldown_seconds: float
     #: DATA_MODE=ws: подписываться на watch_trades, если orderflow в списке вариантов (или явно в env).
     orderflow_ws_collect: bool
+    #: Только paper: чтобы увидеть полный цикл (fill/exit), можно выставлять лимитки "через спред":
+    #: buy по ask и sell по bid (рыночно-исполняемые лимитки). В live не влияет.
+    auto_trade_paper_cross_spread: bool
 
     def paper_trading_fee_bps(self) -> float:
         """Paper: комиссия одной стороны для лимиток (часто maker < taker). Иначе — ARBITRAGE_FEE_BPS_PER_SIDE."""
@@ -231,6 +243,7 @@ def load_settings() -> Settings:
         "on",
     )
     auto_trade = os.getenv("AUTO_TRADE", "false").lower() in ("1", "true", "yes", "on")
+    auto_trade_profile = os.getenv("AUTO_TRADE_PROFILE", "").strip().lower()
     auto_trade_notional = float(os.getenv("AUTO_TRADE_NOTIONAL", "50"))
     auto_trade_cooldown = float(os.getenv("AUTO_TRADE_COOLDOWN_SECONDS", "3"))
     _raw_cd_scope = os.getenv("AUTO_TRADE_COOLDOWN_SCOPE", "exchange_symbol").strip().lower()
@@ -269,6 +282,12 @@ def load_settings() -> Settings:
     )
     auto_trade_arbitrage = os.getenv("AUTO_TRADE_ARBITRAGE", "false").lower() in ("1", "true", "yes", "on")
     auto_trade_min_edge = float(os.getenv("AUTO_TRADE_MIN_EDGE_BPS", "5"))
+    paper_cross = os.getenv("AUTO_TRADE_PAPER_CROSS_SPREAD", "false").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
     scalping_max_slip = float(os.getenv("SCALPING_MAX_SLIPPAGE_BPS", "50"))
     scalping_cancel_prev = os.getenv("SCALPING_CANCEL_PREVIOUS_ORDERS", "true").lower() in (
@@ -344,6 +363,11 @@ def load_settings() -> Settings:
     min_mid_range_bps = float(os.getenv("SCALPING_MIN_MID_RANGE_BPS", "0"))
     min_mid_range_win = float(os.getenv("SCALPING_MIN_MID_RANGE_WINDOW_SECONDS", "30"))
 
+    auto_tune = os.getenv("AUTO_TRADE_AUTO_TUNE", "false").lower() in ("1", "true", "yes", "on")
+    auto_tune_min_rng = float(os.getenv("AUTO_TRADE_AUTO_TUNE_MIN_MID_RANGE_BPS", "0"))
+    auto_tune_rng_mult = float(os.getenv("AUTO_TRADE_AUTO_TUNE_MID_RANGE_MULT", "1.0"))
+    auto_tune_rng_extra = float(os.getenv("AUTO_TRADE_AUTO_TUNE_MID_RANGE_EXTRA_BPS", "1"))
+
     ta_timeframe = os.getenv("TA_TIMEFRAME", "5m").strip()
     ta_ohlcv_limit = int(os.getenv("TA_OHLCV_LIMIT", "120"))
     ta_ohlcv_refresh = float(os.getenv("TA_OHLCV_REFRESH_SECONDS", "45"))
@@ -380,6 +404,30 @@ def load_settings() -> Settings:
     ta_trend_min_rsi_short = float(os.getenv("TA_TREND_MIN_RSI_SHORT", "0"))
     ta_trend_max_ext_short = float(os.getenv("TA_TREND_MAX_EXTEND_BPS_SHORT", "0"))
     ta_regime_mode = os.getenv("TA_REGIME_MODE", "hierarchy").strip().lower()
+
+    # ---------------------------------------------------------------------
+    # AUTO_TRADE profiles: one switch for a coherent parameter bundle.
+    #
+    # quality: fewer trades, better signal confirmation, TP not "near zero"
+    # after fees; also reduces notional in high ATR regimes.
+    # ---------------------------------------------------------------------
+    if auto_trade and auto_trade_profile in ("quality", "quality-first", "quality_first"):
+        # TP should clear exit fee and still leave some net edge.
+        at_tp = 8.0
+        # Filter weak signals (noise); for ws ticks 6–12 bps is typical for majors.
+        min_impulse_at = 12.0
+        # TA trend confirmation: require stronger +DI/-DI separation.
+        ta_min_di = 8.0
+        # ATR→notional: shrink exposure when ATR is high; keep a small floor.
+        atr_not_ref = 20.0
+        atr_not_floor = 0.25
+        # Re-introduce soft hold with a profitability threshold; keep hard hold disabled.
+        # 600s: give trend time to reach TP (quality TP is wider than a 3–4m scalp window).
+        at_hold = 600.0
+        at_hold_min_pnl = 3.0
+        at_hold_min_pnl_long = at_hold_min_pnl
+        at_hold_min_pnl_short = at_hold_min_pnl
+        at_hold_hard = 0.0
 
     def _first_nonempty(*names: str) -> str | None:
         for name in names:
@@ -585,6 +633,12 @@ def load_settings() -> Settings:
         raise ValueError("SCALPING_MIN_MID_RANGE_BPS должен быть >= 0 (0 — выкл.)")
     if min_mid_range_win <= 0:
         raise ValueError("SCALPING_MIN_MID_RANGE_WINDOW_SECONDS должен быть > 0")
+    if auto_tune_min_rng < 0:
+        raise ValueError("AUTO_TRADE_AUTO_TUNE_MIN_MID_RANGE_BPS должен быть >= 0")
+    if auto_tune_rng_mult <= 0:
+        raise ValueError("AUTO_TRADE_AUTO_TUNE_MID_RANGE_MULT должен быть > 0")
+    if auto_tune_rng_extra < 0:
+        raise ValueError("AUTO_TRADE_AUTO_TUNE_MID_RANGE_EXTRA_BPS должен быть >= 0")
 
     cap_max_loss = float(os.getenv("CAPITAL_MAX_SESSION_LOSS_QUOTE", "0"))
     cap_cd = float(os.getenv("CAPITAL_COOLDOWN_AFTER_LOSS_SECONDS", "0"))
@@ -686,6 +740,10 @@ def load_settings() -> Settings:
         auto_trade_max_hold_min_pnl_bps_short=at_hold_min_pnl_short,
         auto_trade_max_hold_hard_seconds=at_hold_hard,
         auto_trade_tp_allow_with_pending=at_tp_allow_pending,
+        auto_trade_auto_tune=auto_tune,
+        auto_trade_auto_tune_min_mid_range_bps=auto_tune_min_rng,
+        auto_trade_auto_tune_mid_range_mult=auto_tune_rng_mult,
+        auto_trade_auto_tune_mid_range_extra_bps=auto_tune_rng_extra,
         auto_trade_arbitrage=auto_trade_arbitrage,
         auto_trade_min_edge_bps=auto_trade_min_edge,
         api_key=api_key,
@@ -761,4 +819,5 @@ def load_settings() -> Settings:
         orderflow_signal_mode=orderflow_signal_mode,
         orderflow_cooldown_seconds=of_cd,
         orderflow_ws_collect=orderflow_ws_collect,
+        auto_trade_paper_cross_spread=paper_cross,
     )

@@ -1,0 +1,60 @@
+2026-04-16 16:38:01,078 INFO arbitrage: Старт: strategy=scalping data=ws биржи=('bybit',) пары=('BTC/USDT', 'ETH/USDT', 'BNB/USDT') комиссия=10.0 bps poll=5.0s paper=True
+2026-04-16 16:38:01,078 INFO arbitrage: Paper: PnL лимиток — комиссия стороны 6.00 bps (PAPER_FEE_BPS_PER_SIDE); ARBITRAGE_FEE_BPS_PER_SIDE=10.00 — для live/арбитража
+2026-04-16 16:38:01,078 INFO arbitrage: Риск: notional/ордер≤10.00 открытых≤2 суммарно≤100.00 | strict_risk_limits=False | auto_trade=True notional=8.00 cooldown=5.0s arb=False edge≥5.0 bps
+2026-04-16 16:38:01,078 INFO arbitrage: AUTO_TRADE: кулдаун по символу (одна сделка на пару; mutex между WS-биржами)
+2026-04-16 16:38:01,078 INFO arbitrage: AUTO_TRADE: потолок одновременных заявок=2 (AUTO_TRADE_MAX_OPEN_ORDERS; итог в «открытых≤» выше)
+2026-04-16 16:38:01,078 INFO arbitrage: AUTO_TRADE: reduce-only (по бирже+паре)
+2026-04-16 16:38:01,078 INFO arbitrage: Скальпинг: заявки только если |импульс сигнала|≥6.0 bps (см. SCALPING_AUTO_TRADE_MIN_IMPULSE_BPS; 0=выкл.)
+2026-04-16 16:38:01,078 INFO arbitrage: Vol-scale номинала: σ_eff≤12.0 bps — полный AUTO_TRADE_NOTIONAL, σ_eff≥45.0 bps — ×0.25; окно σ=15 тиков; калибровка rest=1.00 ws=1.00
+2026-04-16 16:38:01,078 INFO arbitrage: ATR×auto_trade: max_spread_mult=0.35 notional_ref_bps=30.0 floor_mult=0.50 (нужен TA-движок)
+2026-04-16 16:38:01,078 INFO arbitrage: Скальпинг TA (ta_trend): OHLCV 5m×120, REST каждые 45s (TA_OHLCV_*); ta_regime: ADX≥27.0→тренд, узкие BB≤65 bps→консерв.; RSI/ATR Wilder; дедуп на свечу=True; TA_TREND_MIN_DI_DIFF=2.0; ta_trend фильтры: LONG RSI≤72, LONG над SMA≤40 bps
+2026-04-16 16:38:01,078 INFO arbitrage: TA: при отсутствии сделок снизьте SCALPING_AUTO_TRADE_MIN_IMPULSE_BPS (напр. 0–2) или ослабьте TA_RSI_* / TA_BAND_NEAR_BPS
+2026-04-16 16:38:01,078 INFO arbitrage: WebSocket: глубина стакана ORDERBOOK_LIMIT=50
+2026-04-16 16:38:01,078 INFO arbitrage: WS: пульс каждые 30 с — обновления стакана, mid/spread, диапазон mid за интервал; 0=выкл.
+2026-04-16 16:38:07,119 INFO scalping_ta: TA OHLCV: 120 свечей bybit BNB/USDT tf=5m (индикаторы обновляются по REST)
+2026-04-16 16:38:07,120 INFO arbitrage: BNB/USDT bybit | TA trend: LONG ADX=30.1 +DI>18.0 mid>SMA ATR≈11.0bps
+2026-04-16 16:38:07,121 INFO execution: PAPER limit buy BNB/USDT bybit req=0.012849341471249599 price=622.6 filled=0.012849341471249599 remaining=0.0 avg=622.6 id=paper-581fcb46cbf6 status=closed
+2026-04-16 16:38:07,121 INFO arbitrage: auto_trade scalp: buy BNB/USDT bybit req_notional≈8.00 filled=0.012849341471249599 remaining=0.0 status=closed
+2026-04-16 16:38:07,208 INFO scalping_ta: TA OHLCV: 120 свечей bybit BTC/USDT tf=5m (индикаторы обновляются по REST)
+2026-04-16 16:38:07,318 INFO scalping_ta: TA OHLCV: 120 свечей bybit ETH/USDT tf=5m (индикаторы обновляются по REST)
+2026-04-16 16:38:20,419 INFO arbitrage: BTC/USDT bybit | TA trend: LONG ADX=34.6 +DI>22.5 mid>SMA ATR≈15.4bps
+2026-04-16 16:38:20,419 INFO arbitrage: auto_trade: пропуск scalp — |импульс|=5.00 bps < SCALPING_AUTO_TRADE_MIN_IMPULSE_BPS=6.0 (на ws тики часто 1–5 bps; ориентир 2× комиссия ≈ 12 bps круг)
+2026-04-16 16:38:31,086 INFO arbitrage: WS: тиков=2332 | bybit BNB/USDT mid≈622.75 spread 1.606bps (0.10 USDT) за≈30s: диапазон mid≈4.8bps | bybit BTC/USDT mid≈74724.55 spread 0.013bps (0.10 USDT) за≈30s: диапазон mid≈7.1bps | bybit ETH/USDT mid≈2339.97 spread 0.043bps (0.01 USDT) за≈30s: диапазон mid≈11.4bps | paper: реализ.≈0.0000 USDT, комисс.≈0.0048, ордеров buy/sell закрыто 1/0 | TA[ta_trend]: signals≈2/30s | OHLCV 5m по REST ≤45s
+2026-04-16 16:39:01,094 INFO arbitrage: WS: тиков=5159 | bybit BNB/USDT mid≈622.15 spread 1.607bps (0.10 USDT) за≈30s: диапазон mid≈9.6bps | bybit BTC/USDT mid≈74640.15 spread 0.013bps (0.10 USDT) за≈30s: диапазон mid≈13.0bps | bybit ETH/USDT mid≈2337.11 spread 0.043bps (0.01 USDT) за≈30s: диапазон mid≈16.3bps | paper: реализ.≈0.0000 USDT, комисс.≈0.0048, ордеров buy/sell закрыто 1/0 | TA[ta_trend]: signals≈0/30s | OHLCV 5m по REST ≤45s
+2026-04-16 16:39:31,095 INFO arbitrage: WS: тиков=8144 | bybit BNB/USDT mid≈622.05 spread 1.608bps (0.10 USDT) за≈30s: диапазон mid≈4.8bps | bybit BTC/USDT mid≈74629.45 spread 0.013bps (0.10 USDT) за≈30s: диапазон mid≈9.2bps | bybit ETH/USDT mid≈2336.90 spread 0.043bps (0.01 USDT) за≈30s: диапазон mid≈10.4bps | paper: реализ.≈0.0000 USDT, комисс.≈0.0048, ордеров buy/sell закрыто 1/0 | TA[ta_trend]: signals≈0/30s | OHLCV 5m по REST ≤45s
+2026-04-16 16:40:01,096 INFO arbitrage: WS: тиков=11055 | bybit BNB/USDT mid≈621.85 spread 1.608bps (0.10 USDT) за≈30s: диапазон mid≈4.8bps | bybit BTC/USDT mid≈74608.05 spread 0.013bps (0.10 USDT) за≈30s: диапазон mid≈4.0bps | bybit ETH/USDT mid≈2336.64 spread 0.043bps (0.01 USDT) за≈30s: диапазон mid≈12.4bps | paper: реализ.≈0.0000 USDT, комисс.≈0.0048, ордеров buy/sell закрыто 1/0 | TA[ta_trend]: signals≈0/30s | OHLCV 5m по REST ≤45s
+2026-04-16 16:40:21,997 INFO arbitrage: BNB/USDT bybit | TA trend: LONG ADX=27.7 +DI>22.1 mid>SMA ATR≈10.8bps
+2026-04-16 16:40:21,997 INFO arbitrage: auto_trade: пропуск scalp — |импульс|=5.00 bps < SCALPING_AUTO_TRADE_MIN_IMPULSE_BPS=6.0 (на ws тики часто 1–5 bps; ориентир 2× комиссия ≈ 12 bps круг)
+2026-04-16 16:40:31,106 INFO arbitrage: WS: тиков=14169 | bybit BNB/USDT mid≈622.15 spread 1.607bps (0.10 USDT) за≈30s: диапазон mid≈8.0bps | bybit BTC/USDT mid≈74619.05 spread 0.013bps (0.10 USDT) за≈30s: диапазон mid≈9.1bps | bybit ETH/USDT mid≈2337.73 spread 0.043bps (0.01 USDT) за≈30s: диапазон mid≈13.3bps | paper: реализ.≈0.0000 USDT, комисс.≈0.0048, ордеров buy/sell закрыто 1/0 | TA[ta_trend]: signals≈1/30s | OHLCV 5m по REST ≤45s
+2026-04-16 16:41:01,108 INFO arbitrage: WS: тиков=17282 | bybit BNB/USDT mid≈622.35 spread 1.607bps (0.10 USDT) за≈30s: диапазон mid≈8.0bps | bybit BTC/USDT mid≈74655.35 spread 0.013bps (0.10 USDT) за≈30s: диапазон mid≈13.1bps | bybit ETH/USDT mid≈2338.85 spread 0.043bps (0.01 USDT) за≈30s: диапазон mid≈14.2bps | paper: реализ.≈0.0000 USDT, комисс.≈0.0048, ордеров buy/sell закрыто 1/0 | TA[ta_trend]: signals≈0/30s | OHLCV 5m по REST ≤45s
+2026-04-16 16:41:31,115 INFO arbitrage: WS: тиков=20215 | bybit BNB/USDT mid≈622.45 spread 1.607bps (0.10 USDT) за≈30s: диапазон mid≈3.2bps | bybit BTC/USDT mid≈74645.25 spread 0.013bps (0.10 USDT) за≈30s: диапазон mid≈5.4bps | bybit ETH/USDT mid≈2338.28 spread 0.043bps (0.01 USDT) за≈30s: диапазон mid≈7.9bps | paper: реализ.≈0.0000 USDT, комисс.≈0.0048, ордеров buy/sell закрыто 1/0 | TA[ta_trend]: signals≈0/30s | OHLCV 5m по REST ≤45s
+2026-04-16 16:42:01,125 INFO arbitrage: WS: тиков=23475 | bybit BNB/USDT mid≈621.85 spread 1.608bps (0.10 USDT) за≈30s: диапазон mid≈16.1bps | bybit BTC/USDT mid≈74517.75 spread 0.013bps (0.10 USDT) за≈30s: диапазон mid≈25.8bps | bybit ETH/USDT mid≈2333.95 spread 0.043bps (0.01 USDT) за≈30s: диапазон mid≈31.2bps | paper: реализ.≈0.0000 USDT, комисс.≈0.0048, ордеров buy/sell закрыто 1/0 | TA[ta_trend]: signals≈0/30s | OHLCV 5m по REST ≤45s
+2026-04-16 16:42:31,127 INFO arbitrage: WS: тиков=26764 | bybit BNB/USDT mid≈621.75 spread 1.608bps (0.10 USDT) за≈30s: диапазон mid≈6.4bps | bybit BTC/USDT mid≈74476.35 spread 0.013bps (0.10 USDT) за≈30s: диапазон mid≈9.9bps | bybit ETH/USDT mid≈2332.77 spread 0.043bps (0.01 USDT) за≈30s: диапазон mid≈8.9bps | paper: реализ.≈0.0000 USDT, комисс.≈0.0048, ордеров buy/sell закрыто 1/0 | TA[ta_trend]: signals≈0/30s | OHLCV 5m по REST ≤45s
+2026-04-16 16:43:01,128 INFO arbitrage: WS: тиков=29620 | bybit BNB/USDT mid≈621.95 spread 1.608bps (0.10 USDT) за≈30s: диапазон mid≈4.8bps | bybit BTC/USDT mid≈74507.45 spread 0.013bps (0.10 USDT) за≈30s: диапазон mid≈5.7bps | bybit ETH/USDT mid≈2334.36 spread 0.043bps (0.01 USDT) за≈30s: диапазон mid≈8.2bps | paper: реализ.≈0.0000 USDT, комисс.≈0.0048, ордеров buy/sell закрыто 1/0 | TA[ta_trend]: signals≈0/30s | OHLCV 5m по REST ≤45s
+2026-04-16 16:43:31,141 INFO arbitrage: WS: тиков=32529 | bybit BNB/USDT mid≈622.15 spread 1.607bps (0.10 USDT) за≈30s: диапазон mid≈3.2bps | bybit BTC/USDT mid≈74526.45 spread 0.013bps (0.10 USDT) за≈30s: диапазон mid≈4.8bps | bybit ETH/USDT mid≈2335.28 spread 0.043bps (0.01 USDT) за≈30s: диапазон mid≈7.8bps | paper: реализ.≈0.0000 USDT, комисс.≈0.0048, ордеров buy/sell закрыто 1/0 | TA[ta_trend]: signals≈0/30s | OHLCV 5m по REST ≤45s
+2026-04-16 16:44:01,145 INFO arbitrage: WS: тиков=35364 | bybit BNB/USDT mid≈622.25 spread 1.607bps (0.10 USDT) за≈30s: диапазон mid≈3.2bps | bybit BTC/USDT mid≈74555.35 spread 0.013bps (0.10 USDT) за≈30s: диапазон mid≈6.5bps | bybit ETH/USDT mid≈2335.98 spread 0.043bps (0.01 USDT) за≈30s: диапазон mid≈7.5bps | paper: реализ.≈0.0000 USDT, комисс.≈0.0048, ордеров buy/sell закрыто 1/0 | TA[ta_trend]: signals≈0/30s | OHLCV 5m по REST ≤45s
+2026-04-16 16:44:31,149 INFO arbitrage: WS: тиков=38077 | bybit BNB/USDT mid≈622.15 spread 1.607bps (0.10 USDT) за≈30s: диапазон mid≈3.2bps | bybit BTC/USDT mid≈74543.25 spread 0.013bps (0.10 USDT) за≈30s: диапазон mid≈3.5bps | bybit ETH/USDT mid≈2335.32 spread 0.043bps (0.01 USDT) за≈30s: диапазон mid≈4.4bps | paper: реализ.≈0.0000 USDT, комисс.≈0.0048, ордеров buy/sell закрыто 1/0 | TA[ta_trend]: signals≈0/30s | OHLCV 5m по REST ≤45s
+2026-04-16 16:45:01,862 INFO arbitrage: Paper-сессия: реализованный PnL ≈ 0.0000 USDT, комиссии (оценка) ≈ 0.0048 USDT, закрыто ордеров buy/sell: 1/0 | незакрытый инвентарь: BNB/USDT@bybit long≈0.012849 base
+2026-04-16 16:45:01,863 INFO arbitrage: Paper-отчёт:
+paper-отчёт: закрыто ордеров=1 (buy=1 sell=0) | реализ.Δ=+0.0000 USDT | комиссииΔ=+0.0048 | net≈-0.0048 | avg hold≈0.0s
+paper-отчёт: realized events=0 (+0/-0, zero=1)
+paper-отчёт: по инструментам (turnover↓):
+  - bybit BNB/USDT: closed=1 (b=1 s=0) net≈-0.0048 USDT (≈-6.0 bps on turnover), fees≈0.0048, avg hold≈0.0s
+2026-04-16 16:45:01,863 INFO arbitrage: AutoTrade-отчёт:
+auto_trade-отчёт: skip/block events=2
+auto_trade-отчёт: топ причин (count↓):
+  - min_impulse: 2
+auto_trade-отчёт: топ инструментов по числу событий (count↓):
+  - bybit BTC/USDT: 1 (min_impulse=1)
+  - bybit BNB/USDT: 1 (min_impulse=1)
+2026-04-16 16:45:01,864 INFO arbitrage: Unrealized-отчёт:
+unrealized-отчёт: позиций=1 | unreal raw≈-0.0067 USDT | exit fees≈0.0048 | unreal net≈-0.0115
+unrealized-отчёт: по позициям (net↑ хуже→лучше):
+  - bybit BNB/USDT long pos≈0.012849341 entry≈622.97356 mid≈622.45 unreal≈-0.0067 USDT (net≈-0.0115, ≈-14.4 bps net)
+2026-04-16 16:45:01,864 INFO arbitrage: ========== PAPER: итог сессии ==========
+Реализованный PnL (все закрытые сделки с начала запуска) ≈ +0.0000 USDT
+Комиссии (оценка, все стороны) ≈ 0.0048 USDT
+Закрыто ордеров buy / sell: 1 / 0
+Незакрытый инвентарь (оценка нереализ. — в Unrealized-отчёте выше): BNB/USDT@bybit long≈0.012849 base
+Справка: «реализованный» — только по исполненным закрытиям; открытые позиции в итог не входят.
+2026-04-16 16:45:01,864 INFO arbitrage: Остановка по таймауту RUN_SECONDS=420.0

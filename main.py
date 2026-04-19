@@ -255,11 +255,20 @@ async def run_loop() -> None:
             )
         if settings.auto_trade_max_hold_seconds > 0:
             log.info(
-                "AUTO_TRADE: MAX_HOLD=%.0fs; min net pnl для таймера — long≥%.1f bps, short≥%.1f bps (0=выкл.); HARD=%.0fs",
+                "AUTO_TRADE: MAX_HOLD=%.0fs; min net для отлож. таймера (только 0≤net<порог) long=%.1f short=%.1f bps; "
+                "net<0 закрываем по таймеру; HARD=%.0fs",
                 settings.auto_trade_max_hold_seconds,
                 settings.auto_trade_max_hold_min_pnl_bps_long,
                 settings.auto_trade_max_hold_min_pnl_bps_short,
                 settings.auto_trade_max_hold_hard_seconds,
+            )
+        if settings.auto_trade_auto_tune:
+            log.info(
+                "AUTO_TRADE: AUTO_TUNE=true — quiet-market порог auto: min_mid_range≥%.1f bps; mult=%.2f extra=%.1f "
+                "(плюс SCALPING_MIN_MID_RANGE_BPS, если задан)",
+                settings.auto_trade_auto_tune_min_mid_range_bps,
+                settings.auto_trade_auto_tune_mid_range_mult,
+                settings.auto_trade_auto_tune_mid_range_extra_bps,
             )
     if settings.auto_trade and settings.strategy == "scalping":
         streams = len(settings.exchanges) * len(settings.symbols)
