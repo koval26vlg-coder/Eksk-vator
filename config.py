@@ -423,12 +423,12 @@ def load_settings() -> Settings:
     if auto_trade and auto_trade_profile in ("quality", "quality-first", "quality_first"):
         # TP should clear exit fee and still leave some net edge.
         at_tp = 8.0
-        # Filter weak signals (noise); for ws ticks 6–12 bps is typical for majors.
-        min_impulse_at = 14.0
+        # Filter weak signals (noise); stricter than default quality for «реже, плотнее».
+        min_impulse_at = 18.0
         # TA trend confirmation: require stronger +DI/-DI separation.
-        ta_min_di = 8.0
+        ta_min_di = 10.0
         # Skip entries when bid/ask is wide vs ATR (often worse edge for limit scalps).
-        atr_spread_m = 0.28
+        atr_spread_m = 0.24
         # ATR→notional: shrink exposure when ATR is high; keep a small floor.
         atr_not_ref = 20.0
         atr_not_floor = 0.25
@@ -439,6 +439,12 @@ def load_settings() -> Settings:
         at_hold_min_pnl_long = at_hold_min_pnl
         at_hold_min_pnl_short = at_hold_min_pnl
         at_hold_hard = 0.0
+        # Fewer re-entries after a fill / timer exit (env can set higher).
+        auto_trade_cooldown = max(auto_trade_cooldown, 45.0)
+        # AUTO_TUNE quiet-market threshold: slightly above default mix so flat tape skips more often.
+        auto_tune_rt_fee_frac = 0.46
+        auto_tune_tp_net_frac = 0.34
+        auto_tune_rng_extra = max(auto_tune_rng_extra, 1.25)
 
     def _first_nonempty(*names: str) -> str | None:
         for name in names:
