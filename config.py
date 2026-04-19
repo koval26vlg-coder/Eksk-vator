@@ -99,6 +99,12 @@ class Settings:
     auto_trade_auto_tune_mid_range_mult: float
     #: AUTO_TUNE: прибавка (bps) к авто‑порогу range(mid) как небольшой «зазор».
     auto_trade_auto_tune_mid_range_extra_bps: float
+    #: AUTO_TUNE: доля 2×fee в базе порога (короткое окно mid — не полный round-trip).
+    auto_trade_auto_tune_rt_fee_frac: float
+    #: AUTO_TUNE: доля AUTO_TRADE_TP_BPS (net) в базе порога; TP не обязан «вместиться» в 30s range.
+    auto_trade_auto_tune_tp_net_frac: float
+    #: AUTO_TUNE: жёсткий потолок авто‑порога (bps); 0 = без потолка.
+    auto_trade_auto_tune_range_max_bps: float
     auto_trade_arbitrage: bool
     auto_trade_min_edge_bps: float
     api_key: str | None
@@ -367,6 +373,9 @@ def load_settings() -> Settings:
     auto_tune_min_rng = float(os.getenv("AUTO_TRADE_AUTO_TUNE_MIN_MID_RANGE_BPS", "0"))
     auto_tune_rng_mult = float(os.getenv("AUTO_TRADE_AUTO_TUNE_MID_RANGE_MULT", "1.0"))
     auto_tune_rng_extra = float(os.getenv("AUTO_TRADE_AUTO_TUNE_MID_RANGE_EXTRA_BPS", "1"))
+    auto_tune_rt_fee_frac = float(os.getenv("AUTO_TRADE_AUTO_TUNE_RT_FEE_FRAC", "0.42"))
+    auto_tune_tp_net_frac = float(os.getenv("AUTO_TRADE_AUTO_TUNE_TP_NET_FRAC", "0.30"))
+    auto_tune_range_max = float(os.getenv("AUTO_TRADE_AUTO_TUNE_RANGE_MAX_BPS", "0"))
 
     ta_timeframe = os.getenv("TA_TIMEFRAME", "5m").strip()
     ta_ohlcv_limit = int(os.getenv("TA_OHLCV_LIMIT", "120"))
@@ -639,6 +648,12 @@ def load_settings() -> Settings:
         raise ValueError("AUTO_TRADE_AUTO_TUNE_MID_RANGE_MULT должен быть > 0")
     if auto_tune_rng_extra < 0:
         raise ValueError("AUTO_TRADE_AUTO_TUNE_MID_RANGE_EXTRA_BPS должен быть >= 0")
+    if not (0.0 <= auto_tune_rt_fee_frac <= 2.0):
+        raise ValueError("AUTO_TRADE_AUTO_TUNE_RT_FEE_FRAC должен быть в [0, 2]")
+    if not (0.0 <= auto_tune_tp_net_frac <= 2.0):
+        raise ValueError("AUTO_TRADE_AUTO_TUNE_TP_NET_FRAC должен быть в [0, 2]")
+    if auto_tune_range_max < 0:
+        raise ValueError("AUTO_TRADE_AUTO_TUNE_RANGE_MAX_BPS должен быть >= 0 (0 — без потолка)")
 
     cap_max_loss = float(os.getenv("CAPITAL_MAX_SESSION_LOSS_QUOTE", "0"))
     cap_cd = float(os.getenv("CAPITAL_COOLDOWN_AFTER_LOSS_SECONDS", "0"))
@@ -744,6 +759,9 @@ def load_settings() -> Settings:
         auto_trade_auto_tune_min_mid_range_bps=auto_tune_min_rng,
         auto_trade_auto_tune_mid_range_mult=auto_tune_rng_mult,
         auto_trade_auto_tune_mid_range_extra_bps=auto_tune_rng_extra,
+        auto_trade_auto_tune_rt_fee_frac=auto_tune_rt_fee_frac,
+        auto_trade_auto_tune_tp_net_frac=auto_tune_tp_net_frac,
+        auto_trade_auto_tune_range_max_bps=auto_tune_range_max,
         auto_trade_arbitrage=auto_trade_arbitrage,
         auto_trade_min_edge_bps=auto_trade_min_edge,
         api_key=api_key,

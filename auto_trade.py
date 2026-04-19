@@ -1114,13 +1114,20 @@ class ScalpAutoTrader:
         if auto_tune:
             fee_side_bps = float(self._s.paper_trading_fee_bps() if self._s.paper else self._s.fee_bps_per_side)
             tp_net = float(self._s.auto_trade_tp_bps)
-            # Чтобы взять TP net=tp_net, нужно raw >= tp_net + fee_side_bps (комиссия на выход).
-            # Если TP выключен — хотя бы «круг» комиссий (round-trip) должен быть достижим.
-            required_raw = max(2.0 * fee_side_bps, (tp_net + fee_side_bps) if tp_net > 0 else 0.0)
+            rt_fee = 2.0 * fee_side_bps
+            # Короткое окно range(mid) измеряет микродвижение, а не «дойдёт ли цена до TP» за время сделки
+            # (особенно при ta_trend + длинном MAX_HOLD). Поэтому база — взвешенная доля round-trip fee и TP_net,
+            # а не max(2fee, tp_net+fee) целиком (это давало thr≈15 bps при TP=8 и fee=6 и резало типичный BTC).
+            rt_frac = float(getattr(self._s, "auto_trade_auto_tune_rt_fee_frac", 0.42) or 0.42)
+            tp_frac = float(getattr(self._s, "auto_trade_auto_tune_tp_net_frac", 0.30) or 0.30)
+            stiff_base = rt_frac * rt_fee + (tp_frac * max(0.0, tp_net) if tp_net > 0 else 0.0)
             mult = float(getattr(self._s, "auto_trade_auto_tune_mid_range_mult", 1.25) or 1.25)
             extra = float(getattr(self._s, "auto_trade_auto_tune_mid_range_extra_bps", 2.0) or 2.0)
             min_rng = float(getattr(self._s, "auto_trade_auto_tune_min_mid_range_bps", 0.0) or 0.0)
-            thr_auto = max(min_rng, required_raw * mult + extra)
+            rng_max = float(getattr(self._s, "auto_trade_auto_tune_range_max_bps", 0.0) or 0.0)
+            thr_auto = max(min_rng, stiff_base * mult + extra)
+            if rng_max > 0.0:
+                thr_auto = min(thr_auto, rng_max)
             thr_range = max(thr_range, thr_auto)
 
         if thr_range > 0:
