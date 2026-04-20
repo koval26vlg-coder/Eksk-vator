@@ -441,12 +441,18 @@ def load_settings() -> Settings:
     # after fees; also reduces notional in high ATR regimes.
     # ---------------------------------------------------------------------
     if auto_trade and auto_trade_profile in ("quality", "quality-first", "quality_first"):
+        # TA: вместо "немого" ta_trend используем ta_regime(best_signal) — берём лучший из trend/cons/aggr
+        # при согласованной стороне. Это заметно повышает частоту сигналов без перехода в "любой шум".
+        variant = "ta_regime"
+        ta_regime_mode = "best_signal"
         # TP should clear exit fee and still leave some net edge.
         at_tp = 8.0
         # Filter weak signals (noise); stricter than default quality for «реже, плотнее».
         min_impulse_at = 18.0
         # TA trend confirmation: require stronger +DI/-DI separation.
-        ta_min_di = 10.0
+        ta_min_di = 6.0
+        # Снижаем триггер силы тренда: в спокойные часы ADX часто не добирает, а сигналов нет вовсе.
+        ta_trend_adx_trg = min(ta_trend_adx_trg, 18.0)
         # Skip entries when bid/ask is wide vs ATR (often worse edge for limit scalps).
         atr_spread_m = 0.24
         # ATR→notional: shrink exposure when ATR is high; keep a small floor.
