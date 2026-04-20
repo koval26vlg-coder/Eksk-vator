@@ -448,7 +448,7 @@ def load_settings() -> Settings:
 
         # Quiet-market окно: 30s часто слишком коротко для quality-режима (TP=12bps, MAX_HOLD=1800s) —
         # получается "рынок тихий" по микродвижению, хотя за 2–5 минут он даёт нужный ход.
-        scalping_min_mid_range_window = max(scalping_min_mid_range_window, 120.0)
+        min_mid_range_win = max(min_mid_range_win, 120.0)
 
         # TA: вместо "немого" ta_trend используем ta_regime(best_signal) — берём лучший из trend/cons/aggr
         # при согласованной стороне. Это заметно повышает частоту сигналов без перехода в "любой шум".
