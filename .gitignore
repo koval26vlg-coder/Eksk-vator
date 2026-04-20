@@ -8,6 +8,9 @@ venv/
 # Логи запусков бота (python main.py)
 logs/
 
+# Отладочные логи (артефакты локальных прогонов)
+tp_debug*.log
+
 # Локальные данные MCP (SQLite, knowledge graph memory)
 .mcp_data/
 
