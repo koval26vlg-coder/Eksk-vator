@@ -441,6 +441,11 @@ def load_settings() -> Settings:
     # after fees; also reduces notional in high ATR regimes.
     # ---------------------------------------------------------------------
     if auto_trade and auto_trade_profile in ("quality", "quality-first", "quality_first"):
+        # Пользовательский таргет: 100 USDT на позицию (если env задаёт меньше).
+        # Важно поднять и риск-лимит на ордер, иначе авто‑трейд будет резаться на RISK_MAX_NOTIONAL_PER_ORDER.
+        auto_trade_notional = 100.0
+        risk_per_order = max(risk_per_order, auto_trade_notional)
+
         # TA: вместо "немого" ta_trend используем ta_regime(best_signal) — берём лучший из trend/cons/aggr
         # при согласованной стороне. Это заметно повышает частоту сигналов без перехода в "любой шум".
         variant = "ta_regime"

@@ -1203,14 +1203,53 @@ class ScalpAutoTrader:
                 thr_auto = min(thr_auto, rng_max)
             thr_range = max(thr_range, thr_auto)
 
-        if thr_range > 0:
+        # -----------------------------------------------------------------
+        # Volatility-adaptive entry strictness:
+        # спокойный рынок → агрессивнее (ниже min_impulse и порог quiet-market),
+        # волатильный → осторожнее (выше min_impulse и порог quiet-market, строже ATR×spread).
+        #
+        # σ_eff (tick σ) берём из vol-scale окна; ATR_bps — из TA-движка (если подключён).
+        # -----------------------------------------------------------------
+        eff_sig_bps = self._effective_sigma_ticks_bps(exchange_id, q.symbol)
+        atr_bps = self._atr_bps_provider(exchange_id, q.symbol) if self._atr_bps_provider else None
+        vol_ref = float(self._s.scalping_auto_trade_vol_ref_bps)
+        vol_cap = float(self._s.scalping_auto_trade_vol_cap_bps)
+        atr_ref = float(self._s.auto_trade_atr_notional_ref_bps)
+
+        # Базовые "effective" значения, которые могут быть скорректированы режимом.
+        eff_min_imp = float(self._s.scalping_auto_trade_min_impulse_bps)
+        eff_thr_range = float(thr_range)
+        eff_atr_spread_mult = float(self._s.auto_trade_atr_max_spread_mult)
+
+        is_calm = False
+        is_volatile = False
+        if eff_sig_bps is not None:
+            is_calm = eff_sig_bps <= vol_ref + 1e-9
+            is_volatile = eff_sig_bps >= vol_cap - 1e-9
+        if atr_ref > 0 and atr_bps is not None and atr_bps > 1e-9:
+            is_calm = is_calm or (atr_bps <= atr_ref * 0.85)
+            is_volatile = is_volatile or (atr_bps >= atr_ref * 2.0)
+
+        if is_volatile and not is_calm:
+            eff_min_imp *= 1.35
+            eff_thr_range *= 1.25
+            eff_atr_spread_mult *= 0.85
+            self._ana_inc("vol_regime_volatile", exchange_id, q.symbol)
+        elif is_calm and not is_volatile:
+            eff_min_imp *= 0.75
+            eff_thr_range *= 0.85
+            eff_atr_spread_mult *= 1.10
+            self._ana_inc("vol_regime_calm", exchange_id, q.symbol)
+
+        if eff_thr_range > 0:
             now = time.monotonic()
             mid_now = (q.bid + q.ask) / 2.0
             rng = self._mid_range_bps(exchange_id, q.symbol, mid_now, now)
             if rng is None:
-                warm_key = "quiet_market_warmup_auto" if auto_tune and thr_range_user <= 0 else "quiet_market_warmup"
+                warm_key = (
+                    "quiet_market_warmup_auto" if auto_tune and thr_range_user <= 0 else "quiet_market_warmup"
+                )
                 self._ana_inc(warm_key, exchange_id, q.symbol)
-                # warmup: пока нет окна mid — лучше не входить, иначе фильтр «тихий рынок» не работает на старте.
                 if self._quiet_skip_log_ok(exchange_id, q.symbol, now):
                     win_s = float(getattr(self._s, "scalping_min_mid_range_window_seconds", 30.0) or 30.0)
                     need_s = win_s * 0.9
@@ -1225,42 +1264,42 @@ class ScalpAutoTrader:
                         exchange_id,
                     )
                 return
-            if rng + 1e-9 < thr_range:
-                flat_key = "quiet_market_flat_auto" if auto_tune and thr_range_user <= 0 else "quiet_market_flat"
+            if rng + 1e-9 < eff_thr_range:
+                flat_key = (
+                    "quiet_market_flat_auto" if auto_tune and thr_range_user <= 0 else "quiet_market_flat"
+                )
                 self._ana_inc(flat_key, exchange_id, q.symbol)
                 if self._quiet_skip_log_ok(exchange_id, q.symbol, now):
                     win_s = float(getattr(self._s, "scalping_min_mid_range_window_seconds", 30.0) or 30.0)
                     if auto_tune and thr_range_user <= 0:
                         self._log.info(
                             "auto_trade: auto-tune quiet-market — range(mid)≈%.1f bps за скользящие %.0fs < "
-                            "thr≈%.1f (auto): вход не открываем. (%s %s)",
+                            "thr≈%.1f (effective): вход не открываем. (%s %s)",
                             rng,
                             win_s,
-                            thr_range,
+                            eff_thr_range,
                             q.symbol,
                             exchange_id,
                         )
                     else:
                         self._log.info(
                             "auto_trade: quiet-market — range(mid)≈%.1f bps за скользящие %.0fs < "
-                            "SCALPING_MIN_MID_RANGE_BPS=%.1f: вход не открываем (рынок «плоский» по этому критерию). "
-                            "Если часто режет на чуть меньшем range — понизьте порог или поставьте 0 (выкл.). (%s %s)",
+                            "SCALPING_MIN_MID_RANGE_BPS=%.1f (effective): вход не открываем. (%s %s)",
                             rng,
                             win_s,
-                            thr_range,
+                            eff_thr_range,
                             q.symbol,
                             exchange_id,
                         )
                 return
 
-        min_imp = float(self._s.scalping_auto_trade_min_impulse_bps)
-        if min_imp > 0 and sig.impulse_bps is not None and sig.impulse_bps + 1e-9 < min_imp:
+        if eff_min_imp > 0 and sig.impulse_bps is not None and sig.impulse_bps + 1e-9 < eff_min_imp:
             self._ana_inc("min_impulse", exchange_id, q.symbol)
             self._log.info(
-                "auto_trade: пропуск scalp — |импульс|=%.2f bps < SCALPING_AUTO_TRADE_MIN_IMPULSE_BPS=%.1f "
+                "auto_trade: пропуск scalp — |импульс|=%.2f bps < SCALPING_AUTO_TRADE_MIN_IMPULSE_BPS≈%.1f (effective) "
                 "(на ws тики часто 1–5 bps; ориентир 2× комиссия ≈ %.0f bps круг)",
                 sig.impulse_bps,
-                min_imp,
+                eff_min_imp,
                 2.0 * float(self._s.paper_trading_fee_bps() if self._s.paper else self._s.fee_bps_per_side),
             )
             return
@@ -1278,7 +1317,7 @@ class ScalpAutoTrader:
                 base,
             )
 
-        atr_bps = self._atr_bps_provider(exchange_id, q.symbol) if self._atr_bps_provider else None
+        # ATR_bps уже запрошен выше (для вол-режима); повторно не считаем.
         ref_atr = float(self._s.auto_trade_atr_notional_ref_bps)
         fl = float(self._s.auto_trade_atr_notional_floor_mult)
         if ref_atr > 0 and atr_bps is not None and atr_bps > 1e-9:
@@ -1294,7 +1333,7 @@ class ScalpAutoTrader:
                     m_atr,
                 )
 
-        mult_sp = float(self._s.auto_trade_atr_max_spread_mult)
+        mult_sp = float(eff_atr_spread_mult)
         if mult_sp > 0 and atr_bps is not None and atr_bps > 1e-9:
             sp_bps = spread_bps(q.bid, q.ask)
             lim = atr_bps * mult_sp
