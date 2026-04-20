@@ -446,13 +446,17 @@ def load_settings() -> Settings:
         variant = "ta_regime"
         ta_regime_mode = "best_signal"
         # TP should clear exit fee and still leave some net edge.
-        at_tp = 8.0
+        # 8 bps net is often too small vs noise; target a bit more to offset occasional SL.
+        at_tp = 12.0
         # Filter weak signals (noise); stricter than default quality for «реже, плотнее».
-        min_impulse_at = 18.0
+        min_impulse_at = 20.0
         # TA trend confirmation: require stronger +DI/-DI separation.
-        ta_min_di = 6.0
+        ta_min_di = 8.0
         # Снижаем триггер силы тренда: в спокойные часы ADX часто не добирает, а сигналов нет вовсе.
-        ta_trend_adx_trg = min(ta_trend_adx_trg, 18.0)
+        ta_trend_adx_trg = min(ta_trend_adx_trg, 20.0)
+        # Conservative mean-reversion: keep it strict (avoid RSI~45 "soft dips" that don't pay for fees).
+        ta_rsi_os = min(ta_rsi_os, 35.0)
+        ta_band_near = min(ta_band_near, 25.0)
         # Skip entries when bid/ask is wide vs ATR (often worse edge for limit scalps).
         atr_spread_m = 0.24
         # ATR→notional: shrink exposure when ATR is high; keep a small floor.
@@ -469,12 +473,12 @@ def load_settings() -> Settings:
         at_hold_book_tp_stale = 14400.0
         # One paper position across symbols — avoids simultaneous BTC+ETH longs both dying on timer.
         auto_trade_single_open = True
-        # If SL is enabled in env, widen slightly vs typical 50 bps noise; with SL on, ATR mult adds room in volatile tape.
+        # If SL is enabled in env, keep it reasonably tight; wide SL + small TP makes expectancy negative.
         if at_sl > 1e-9:
-            at_sl = max(at_sl, 62.0)
-            at_sl_atr_mult = max(at_sl_atr_mult, 1.25)
+            at_sl = min(at_sl, 40.0)
+            at_sl_atr_mult = max(at_sl_atr_mult, 1.10)
         elif at_sl_atr_mult > 1e-9:
-            at_sl_atr_mult = max(at_sl_atr_mult, 1.25)
+            at_sl_atr_mult = max(at_sl_atr_mult, 1.10)
         # Fewer re-entries after a fill / timer exit (env can set higher).
         auto_trade_cooldown = max(auto_trade_cooldown, 45.0)
         # AUTO_TUNE quiet-market threshold: slightly above default mix so flat tape skips more often.
