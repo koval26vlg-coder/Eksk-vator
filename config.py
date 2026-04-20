@@ -475,6 +475,8 @@ def load_settings() -> Settings:
         auto_tune_rt_fee_frac = 0.46
         auto_tune_tp_net_frac = 0.34
         auto_tune_rng_extra = max(auto_tune_rng_extra, 1.25)
+        # Умеренно мягче: снижает auto-порог range(mid) (и меньше quiet_market_flat_auto), но не открывает «любой шум».
+        auto_tune_rng_mult = 0.82
 
     def _first_nonempty(*names: str) -> str | None:
         for name in names:
