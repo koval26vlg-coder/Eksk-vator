@@ -484,8 +484,9 @@ def load_settings() -> Settings:
         at_hold_min_pnl_short = at_hold_min_pnl
         # MAX_HOLD: не фиксируем маленький минус только из‑за таймера (обычно это комиссии/шум).
         # С потолком по возрасту (at_hold_book_tp_stale) позиция всё равно не «зависнет» навечно.
-        at_hold_skip_neg = 8.0
-        at_hold_hard = 0.0
+        at_hold_skip_neg = 4.0
+        # Жёсткий потолок: даже если "деферим" MAX_HOLD (small-loss / book-tp), после этого времени закрываем.
+        at_hold_hard = 5400.0
         # Мягкий MAX_HOLD: не закрывать по таймеру, пока по стакану полный выход ещё «под TP»; потолок по возрасту — чтобы не ждать вечно.
         at_hold_book_tp_gate = True
         at_hold_book_tp_stale = 14400.0
