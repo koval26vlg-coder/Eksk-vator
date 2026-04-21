@@ -462,7 +462,7 @@ def load_settings() -> Settings:
         ta_regime_mode = "best_signal"
         # TP should clear exit fee and still leave some net edge.
         # 8 bps net is often too small vs noise; target a bit more to offset occasional SL.
-        at_tp = 12.0
+        at_tp = 18.0
         # Filter weak signals (noise); stricter than default quality for «реже, плотнее».
         min_impulse_at = 20.0
         # TA trend confirmation: require stronger +DI/-DI separation.
