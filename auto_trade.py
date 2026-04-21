@@ -100,6 +100,8 @@ class ScalpAutoTrader:
         self._pos_open_mono: dict[str, float] = {}
         # Чтобы не спамить причинами "почему exit пропущен" на каждом тике.
         self._exit_skip_log_mono: dict[str, float] = {}
+        # Backoff после отказа выставления exit (например, risk per_order чуть меньше qty×price).
+        self._exit_reject_until_mono: dict[tuple[str, str], float] = {}
         # Quiet-market guard: окно mid по ноге (биржа+символ), чтобы отсекать «тихий» рынок.
         # key=(exchange_id, symbol) -> deque[(mono_ts, mid)]
         self._mid_window: dict[tuple[str, str], deque[tuple[float, float]]] = {}
@@ -431,6 +433,12 @@ class ScalpAutoTrader:
         leg_key = f"{exchange_id}:{sym}"
         self._pos_open_mono.setdefault(leg_key, now_mono)
 
+        # Если ранее exit по этой ноге был отвергнут (risk/capital/ликвидность) — не спамим попытками на каждом тике.
+        rej_key = (str(exchange_id), str(sym))
+        until = float(self._exit_reject_until_mono.get(rej_key, 0.0) or 0.0)
+        if now_mono < until:
+            return
+
         if mid <= 0:
             if self._exit_skip_log_ok(symbol, now_mono):
                 self._log.info("auto_trade: exit %s — пропуск: mid<=0 (bid=%s ask=%s)", symbol, best_bid, best_ask)
@@ -564,19 +572,20 @@ class ScalpAutoTrader:
             return
 
         amount = abs(pos)
-        self._log.info(
-            "auto_trade: exit %s %s %s pos≈%.8f entry≈%.8g mid≈%.8g pnl≈%.1fbps → %s @ %.8g (%s)",
-            sym,
-            exchange_id,
-            "long" if pos > 0 else "short",
-            pos,
-            entry,
-            mid,
-            pnl_bps,
-            exit_side,
-            exit_price,
-            reason,
-        )
+        if self._exit_skip_log_ok(sym, now_mono, throttle_s=15.0):
+            self._log.info(
+                "auto_trade: exit %s %s %s pos≈%.8f entry≈%.8g mid≈%.8g pnl≈%.1fbps → %s @ %.8g (%s)",
+                sym,
+                exchange_id,
+                "long" if pos > 0 else "short",
+                pos,
+                entry,
+                mid,
+                pnl_bps,
+                exit_side,
+                exit_price,
+                reason,
+            )
         order = await self._ex.place_limit(
             exchange_id,
             sym,
@@ -587,7 +596,9 @@ class ScalpAutoTrader:
             risk_priority="exit",
         )
         if not order:
-            if self._exit_skip_log_ok(symbol, now_mono):
+            # Backoff: при отказе — пауза перед следующей попыткой (иначе будет сотни попыток/сек на WS).
+            self._exit_reject_until_mono[rej_key] = now_mono + 15.0
+            if self._exit_skip_log_ok(symbol, now_mono, throttle_s=15.0):
                 self._log.info(
                     "auto_trade: exit %s — не выставлен (отказ риск/капитал/ликвидность). side=%s amount≈%.8f price≈%.8g",
                     sym,
@@ -595,7 +606,7 @@ class ScalpAutoTrader:
                     amount,
                     exit_price,
                 )
-            self._ana_inc("exit_place_limit_rejected", exchange_id, sym)
+                self._ana_inc("exit_place_limit_rejected", exchange_id, sym)
             return
         self._register_order(exchange_id, sym, order, kind="exit")
         self._mark(exchange_id, sym)

@@ -444,7 +444,8 @@ def load_settings() -> Settings:
         # Пользовательский таргет: 100 USDT на позицию (если env задаёт меньше).
         # Важно поднять и риск-лимит на ордер, иначе авто‑трейд будет резаться на RISK_MAX_NOTIONAL_PER_ORDER.
         auto_trade_notional = 100.0
-        risk_per_order = max(risk_per_order, auto_trade_notional)
+        # Делаем небольшой буфер, иначе exit может отлетать по лимиту при движении цены (qty×price > 100).
+        risk_per_order = max(risk_per_order, auto_trade_notional * 1.05)
 
         # Quiet-market окно: 30s часто слишком коротко для quality-режима (TP=12bps, MAX_HOLD=1800s) —
         # получается "рынок тихий" по микродвижению, хотя за 2–5 минут он даёт нужный ход.
