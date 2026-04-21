@@ -89,6 +89,10 @@ class Settings:
     auto_trade_max_hold_min_pnl_bps_long: float
     #: MIN_PNL для short при MAX_HOLD (пустой env → как auto_trade_max_hold_min_pnl_bps).
     auto_trade_max_hold_min_pnl_bps_short: float
+    #: Авто-выход (paper): при мягком MAX_HOLD не закрывать «мелкий минус» (net после fee на выход),
+    #: если pnl_net_bps >= -порог (bps). 0 = выкл.
+    #: Идея: не фиксировать маленький минус от комиссий/шума по таймеру — дать позиции шанс выйти в 0/плюс.
+    auto_trade_max_hold_skip_if_pnl_net_ge_neg_bps: float
     #: Авто-выход (paper): "жёсткий" MAX_HOLD — закрыть позицию при достижении времени, независимо от pnl/min_pnl. 0 = выкл.
     auto_trade_max_hold_hard_seconds: float
     #: Paper: мягкий MAX_HOLD не закрывать, пока полный выход по стакану (VWAP) всё ещё даёт net≥TP (глубина «под плюс»).
@@ -290,6 +294,7 @@ def load_settings() -> Settings:
     _hms_raw = os.getenv("AUTO_TRADE_MAX_HOLD_MIN_PNL_BPS_SHORT", "").strip()
     at_hold_min_pnl_long = float(_hml_raw) if _hml_raw else at_hold_min_pnl
     at_hold_min_pnl_short = float(_hms_raw) if _hms_raw else at_hold_min_pnl
+    at_hold_skip_neg = float(os.getenv("AUTO_TRADE_MAX_HOLD_SKIP_IF_PNL_NET_GE_NEG_BPS", "0"))
     at_hold_hard = float(os.getenv("AUTO_TRADE_MAX_HOLD_HARD_SECONDS", "0"))
     at_hold_book_tp_gate = os.getenv("AUTO_TRADE_MAX_HOLD_BOOK_TP_GATE", "false").lower() in (
         "1",
@@ -477,6 +482,9 @@ def load_settings() -> Settings:
         at_hold_min_pnl = 3.0
         at_hold_min_pnl_long = at_hold_min_pnl
         at_hold_min_pnl_short = at_hold_min_pnl
+        # MAX_HOLD: не фиксируем маленький минус только из‑за таймера (обычно это комиссии/шум).
+        # С потолком по возрасту (at_hold_book_tp_stale) позиция всё равно не «зависнет» навечно.
+        at_hold_skip_neg = 8.0
         at_hold_hard = 0.0
         # Мягкий MAX_HOLD: не закрывать по таймеру, пока по стакану полный выход ещё «под TP»; потолок по возрасту — чтобы не ждать вечно.
         at_hold_book_tp_gate = True
@@ -670,6 +678,8 @@ def load_settings() -> Settings:
         raise ValueError("AUTO_TRADE_SL_ATR_MULT должен быть >= 0 (0 — выкл.)")
     if at_hold < 0:
         raise ValueError("AUTO_TRADE_MAX_HOLD_SECONDS должен быть >= 0 (0 — выкл.)")
+    if at_hold_skip_neg < 0:
+        raise ValueError("AUTO_TRADE_MAX_HOLD_SKIP_IF_PNL_NET_GE_NEG_BPS должен быть >= 0 (0 — выкл.)")
     if at_hold_min_pnl < 0:
         raise ValueError("AUTO_TRADE_MAX_HOLD_MIN_PNL_BPS должен быть >= 0 (0 — выкл.)")
     if at_hold_min_pnl_long < 0 or at_hold_min_pnl_short < 0:
@@ -816,6 +826,7 @@ def load_settings() -> Settings:
         auto_trade_max_hold_min_pnl_bps=at_hold_min_pnl,
         auto_trade_max_hold_min_pnl_bps_long=at_hold_min_pnl_long,
         auto_trade_max_hold_min_pnl_bps_short=at_hold_min_pnl_short,
+        auto_trade_max_hold_skip_if_pnl_net_ge_neg_bps=at_hold_skip_neg,
         auto_trade_max_hold_hard_seconds=at_hold_hard,
         auto_trade_max_hold_book_tp_gate=at_hold_book_tp_gate,
         auto_trade_max_hold_book_tp_stale_seconds=at_hold_book_tp_stale,

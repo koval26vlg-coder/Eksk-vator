@@ -490,6 +490,9 @@ class ScalpAutoTrader:
             opened = float(self._pos_open_mono.get(leg_key, now_mono))
             if now_mono - opened >= hold:
                 age = now_mono - opened
+                # Общий потолок по возрасту для любых "деферов" MAX_HOLD (чтобы позиция не висела бесконечно).
+                stale_cap = float(getattr(self._s, "auto_trade_max_hold_book_tp_stale_seconds", 0.0) or 0.0)
+                hold_skip_neg = float(getattr(self._s, "auto_trade_max_hold_skip_if_pnl_net_ge_neg_bps", 0.0) or 0.0)
                 if hold_hard > 0 and age >= hold_hard:
                     reason = f"MAX_HOLD_HARD {age:.0f}s≥{hold_hard:.0f}s"
                 elif (
@@ -513,11 +516,26 @@ class ScalpAutoTrader:
                         # Важно: считаем события пропуска только когда лог прошёл троттлинг,
                         # иначе на WS будет десятки тысяч инкрементов/сессию и отчёт потеряет смысл.
                         self._ana_inc("exit_max_hold_min_pnl_skip", exchange_id, sym)
+                elif (
+                    hold_skip_neg > 0.0
+                    and pnl_net_bps + 1e-9 < 0.0
+                    and pnl_net_bps + 1e-9 >= -hold_skip_neg
+                    and (stale_cap <= 0.0 or age < stale_cap)
+                ):
+                    if self._exit_skip_log_ok(sym, now_mono):
+                        side_tag = "long" if pos > 0 else "short"
+                        self._log.info(
+                            "auto_trade: exit %s — пропуск MAX_HOLD (%s): pnl_net≈%.1fbps (raw≈%.1f fee≈%.1f) >= -%.1f bps",
+                            sym,
+                            side_tag,
+                            pnl_net_bps,
+                            pnl_bps,
+                            fee_side_bps,
+                            hold_skip_neg,
+                        )
+                        self._ana_inc("exit_max_hold_small_loss_skip", exchange_id, sym)
                 else:
                     gate = bool(getattr(self._s, "auto_trade_max_hold_book_tp_gate", False))
-                    stale_cap = float(
-                        getattr(self._s, "auto_trade_max_hold_book_tp_stale_seconds", 0.0) or 0.0
-                    )
                     if (
                         gate
                         and tp > 0
