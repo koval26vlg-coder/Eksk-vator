@@ -528,6 +528,14 @@ def load_settings() -> Settings:
     if not sym_list:
         raise ValueError("ARBITRAGE_SYMBOLS пусто")
 
+    # Для профиля quality держим «белый список» пар по умолчанию:
+    # ETH исторически давал отрицательное матожидание (частые SL), поэтому убираем,
+    # а SOL добавляем как более ликвидный альт (по логам проверяем спред/quiet-market).
+    if auto_trade and auto_trade_profile in ("quality", "quality-first", "quality_first"):
+        preferred = ("BTC/USDT", "BNB/USDT", "SOL/USDT")
+        seen: set[str] = set()
+        sym_list = [s for s in preferred if not (s in seen or seen.add(s))]  # preserve order, unique
+
     if strategy == "scalping":
         sex = os.getenv("SCALPING_EXCHANGE", "").strip()
         raw_multi_ex = os.getenv("SCALPING_EXCHANGES", "").strip()
