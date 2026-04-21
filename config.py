@@ -464,7 +464,7 @@ def load_settings() -> Settings:
         # 8 bps net is often too small vs noise; target a bit more to offset occasional SL.
         at_tp = 18.0
         # Filter weak signals (noise); stricter than default quality for «реже, плотнее».
-        min_impulse_at = 20.0
+        min_impulse_at = 24.0
         # TA trend confirmation: require stronger +DI/-DI separation.
         ta_min_di = 8.0
         # Снижаем триггер силы тренда: в спокойные часы ADX часто не добирает, а сигналов нет вовсе.
