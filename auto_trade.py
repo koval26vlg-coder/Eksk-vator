@@ -475,6 +475,11 @@ class ScalpAutoTrader:
         else:
             sl_eff = sl
 
+        opened = float(self._pos_open_mono.get(leg_key, now_mono))
+        age = now_mono - opened
+        early_stop_s = float(getattr(self._s, "auto_trade_early_stop_seconds", 0.0) or 0.0)
+        early_stop_loss = float(getattr(self._s, "auto_trade_early_stop_max_loss_net_bps", 0.0) or 0.0)
+
         reason: str | None = None
         if tp > 0 and pnl_net_bps >= tp:
             reason = f"TP net {pnl_net_bps:.1f}≥{tp:.1f} bps (raw≈{pnl_bps:.1f} fee≈{fee_side_bps:.1f})"
@@ -486,16 +491,19 @@ class ScalpAutoTrader:
                 )
             else:
                 reason = f"SL {pnl_bps:.1f}≤-{sl_eff:.1f} bps"
-        elif hold > 0:
-            opened = float(self._pos_open_mono.get(leg_key, now_mono))
-            if now_mono - opened >= hold:
-                age = now_mono - opened
+        elif early_stop_s > 0 and early_stop_loss > 0 and age <= early_stop_s and pnl_net_bps <= -early_stop_loss:
+            reason = (
+                f"EARLY_STOP net {pnl_net_bps:.1f}≤-{early_stop_loss:.1f} bps in {age:.0f}s≤{early_stop_s:.0f}s "
+                f"(raw≈{pnl_bps:.1f} fee≈{fee_side_bps:.1f})"
+            )
+        else:
+            if hold_hard > 0 and age >= hold_hard:
+                reason = f"MAX_HOLD_HARD {age:.0f}s≥{hold_hard:.0f}s"
+            elif hold > 0 and age >= hold:
                 # Общий потолок по возрасту для любых "деферов" MAX_HOLD (чтобы позиция не висела бесконечно).
                 stale_cap = float(getattr(self._s, "auto_trade_max_hold_book_tp_stale_seconds", 0.0) or 0.0)
                 hold_skip_neg = float(getattr(self._s, "auto_trade_max_hold_skip_if_pnl_net_ge_neg_bps", 0.0) or 0.0)
-                if hold_hard > 0 and age >= hold_hard:
-                    reason = f"MAX_HOLD_HARD {age:.0f}s≥{hold_hard:.0f}s"
-                elif (
+                if (
                     hold_min_pnl > 0
                     and pnl_net_bps + 1e-9 < hold_min_pnl
                     and pnl_net_bps + 1e-9 >= 0.0

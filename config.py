@@ -79,6 +79,11 @@ class Settings:
     auto_trade_sl_bps: float
     #: Авто-выход (paper): SL как max(SL_BPS, SL_ATR_MULT × ATR_bps). 0 = выключить ATR-надбавку.
     auto_trade_sl_atr_mult: float
+    #: Авто-выход (paper): ранний "invalidation" — если позиция в первые N секунд уходит в net‑минус хуже порога,
+    #: закрываем сразу (не ждём широкого SL). 0 = выключить.
+    auto_trade_early_stop_seconds: float
+    #: Авто-выход (paper): порог раннего стопа по net‑PnL (bps, положительное число). 0 = выключить.
+    auto_trade_early_stop_max_loss_net_bps: float
     #: Авто-выход: макс. время удержания позиции (сек); 0 = выкл.
     auto_trade_max_hold_seconds: float
     #: Авто-выход (paper): при мягком MAX_HOLD не закрывать «мелкий плюс» (net после fee на выход),
@@ -305,6 +310,8 @@ def load_settings() -> Settings:
     _raw_hold_book_stale = os.getenv("AUTO_TRADE_MAX_HOLD_BOOK_TP_STALE_SECONDS", "0").strip()
     at_hold_book_tp_stale = float(_raw_hold_book_stale) if _raw_hold_book_stale else 0.0
     at_sl_atr_mult = float(os.getenv("AUTO_TRADE_SL_ATR_MULT", "0"))
+    at_early_stop_s = float(os.getenv("AUTO_TRADE_EARLY_STOP_SECONDS", "0"))
+    at_early_stop_loss = float(os.getenv("AUTO_TRADE_EARLY_STOP_MAX_LOSS_NET_BPS", "0"))
     at_tp_allow_pending = os.getenv("AUTO_TRADE_TP_ALLOW_WITH_PENDING", "false").lower() in (
         "1",
         "true",
@@ -477,16 +484,20 @@ def load_settings() -> Settings:
         # ATR→notional: shrink exposure when ATR is high; keep a small floor.
         atr_not_ref = 20.0
         atr_not_floor = 0.25
-        # Longer hold: ta_trend + TP net 8 bps often need more than 10m; user OK to wait for a winning exit.
-        at_hold = 1200.0
+        # Soft MAX_HOLD в quality отключаем: таймерные закрытия часто фиксируют минус/комиссии.
+        # Оставляем только аварийный HARD как страховку от «вечного» зависания.
+        at_hold = 0.0
         at_hold_min_pnl = 3.0
         at_hold_min_pnl_long = at_hold_min_pnl
         at_hold_min_pnl_short = at_hold_min_pnl
         # MAX_HOLD: не фиксируем маленький минус только из‑за таймера (обычно это комиссии/шум).
         # С потолком по возрасту (at_hold_book_tp_stale) позиция всё равно не «зависнет» навечно.
         at_hold_skip_neg = 4.0
-        # Жёсткий потолок: даже если "деферим" MAX_HOLD (small-loss / book-tp), после этого времени закрываем.
-        at_hold_hard = 5400.0
+        # Жёсткий потолок (аварийный): закрыть позицию, если она живёт слишком долго.
+        at_hold_hard = 14400.0
+        # Ранний invalidation: если идея "не пошла" в первые минуты — режем убыток рано (до большого SL).
+        at_early_stop_s = 300.0
+        at_early_stop_loss = 12.0
         # Мягкий MAX_HOLD: не закрывать по таймеру, пока по стакану полный выход ещё «под TP»; потолок по возрасту — чтобы не ждать вечно.
         at_hold_book_tp_gate = True
         at_hold_book_tp_stale = 14400.0
@@ -501,11 +512,9 @@ def load_settings() -> Settings:
         # Fewer re-entries after a fill / timer exit (env can set higher).
         auto_trade_cooldown = max(auto_trade_cooldown, 45.0)
         # AUTO_TUNE quiet-market threshold: slightly above default mix so flat tape skips more often.
-        auto_tune_rt_fee_frac = 0.46
-        auto_tune_tp_net_frac = 0.34
-        auto_tune_rng_extra = max(auto_tune_rng_extra, 1.25)
-        # Умеренно мягче: снижает auto-порог range(mid) (и меньше quiet_market_flat_auto), но не открывает «любой шум».
-        auto_tune_rng_mult = 0.72
+        # В quality отключаем AUTO_TUNE-quiet gate: он часто душит хорошие TA-сигналы при TP=18.
+        # Качество входа держим через min_impulse + TA + ATR×spread.
+        auto_tune = False
 
     def _first_nonempty(*names: str) -> str | None:
         for name in names:
@@ -687,6 +696,10 @@ def load_settings() -> Settings:
         raise ValueError("AUTO_TRADE_SL_ATR_MULT должен быть >= 0 (0 — выкл.)")
     if at_hold < 0:
         raise ValueError("AUTO_TRADE_MAX_HOLD_SECONDS должен быть >= 0 (0 — выкл.)")
+    if at_early_stop_s < 0:
+        raise ValueError("AUTO_TRADE_EARLY_STOP_SECONDS должен быть >= 0 (0 — выкл.)")
+    if at_early_stop_loss < 0:
+        raise ValueError("AUTO_TRADE_EARLY_STOP_MAX_LOSS_NET_BPS должен быть >= 0 (0 — выкл.)")
     if at_hold_skip_neg < 0:
         raise ValueError("AUTO_TRADE_MAX_HOLD_SKIP_IF_PNL_NET_GE_NEG_BPS должен быть >= 0 (0 — выкл.)")
     if at_hold_min_pnl < 0:
@@ -831,6 +844,8 @@ def load_settings() -> Settings:
         auto_trade_tp_bps=at_tp,
         auto_trade_sl_bps=at_sl,
         auto_trade_sl_atr_mult=at_sl_atr_mult,
+        auto_trade_early_stop_seconds=at_early_stop_s,
+        auto_trade_early_stop_max_loss_net_bps=at_early_stop_loss,
         auto_trade_max_hold_seconds=at_hold,
         auto_trade_max_hold_min_pnl_bps=at_hold_min_pnl,
         auto_trade_max_hold_min_pnl_bps_long=at_hold_min_pnl_long,
