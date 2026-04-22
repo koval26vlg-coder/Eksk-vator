@@ -1419,6 +1419,7 @@ class ScalpAutoTrader:
             single_open = bool(getattr(self._s, "auto_trade_single_open_position", False))
             max_pos = int(getattr(self._s, "auto_trade_max_open_positions", 0) or 0)
             block_corr = bool(getattr(self._s, "auto_trade_block_correlated_same_dir", False))
+            max_same_dir = int(getattr(self._s, "auto_trade_max_positions_same_direction", 0) or 0)
 
             want_dir = 1 if sig.side == "buy" else -1
             corr_group = {"BTC/USDT", "SOL/USDT"}
@@ -1449,6 +1450,27 @@ class ScalpAutoTrader:
                             "auto_trade: risk-slots — уже есть %d позиций (лимит %d), новый вход %s %s пропускаем",
                             len(other_pos),
                             eff_max_pos,
+                            q.symbol,
+                            exchange_id,
+                        )
+                    return
+
+            if max_same_dir > 0:
+                same_dir = 0
+                for ex, sym, o_pos in non_dust:
+                    if ex == exchange_id and sym == q.symbol:
+                        continue
+                    have_dir = 1 if o_pos > 0 else -1
+                    if have_dir == want_dir:
+                        same_dir += 1
+                if same_dir >= max_same_dir:
+                    self._ana_inc("risk_same_dir_full", exchange_id, q.symbol)
+                    if self._entry_skip_log_ok("risk_same_dir_full", exchange_id, q.symbol, nowm):
+                        self._log.info(
+                            "auto_trade: risk-dir — уже есть %d позиций dir=%s (лимит %d), новый вход %s %s пропускаем",
+                            same_dir,
+                            "long" if want_dir > 0 else "short",
+                            max_same_dir,
                             q.symbol,
                             exchange_id,
                         )

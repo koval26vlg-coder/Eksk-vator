@@ -75,6 +75,9 @@ class Settings:
     auto_trade_max_open_positions: int
     #: Paper: блокировать одновременные позиции в одном направлении на коррелирующих парах (BTC<->SOL).
     auto_trade_block_correlated_same_dir: bool
+    #: Paper: максимум позиций в одном направлении (long или short). 0 = без лимита.
+    #: Пример: max_open_positions=2 и max_same_dir=1 → одновременно можно держать 1 long + 1 short, но не 2 long.
+    auto_trade_max_positions_same_direction: int
     #: Reduce-only/exit: считать позицию "пылью", если |pos_base|×mid < порога (в quote, напр. USDT). 0 = выкл.
     auto_trade_position_dust_quote: float
     #: Авто-выход: take-profit в bps от цены входа; 0 = выкл.
@@ -301,6 +304,7 @@ def load_settings() -> Settings:
         "yes",
         "on",
     )
+    auto_trade_max_same_dir = int(float(os.getenv("AUTO_TRADE_MAX_POSITIONS_SAME_DIRECTION", "0")))
     pos_dust_quote = float(os.getenv("AUTO_TRADE_POSITION_DUST_QUOTE", "0"))
     at_tp = float(os.getenv("AUTO_TRADE_TP_BPS", "0"))
     at_sl = float(os.getenv("AUTO_TRADE_SL_BPS", "0"))
@@ -516,6 +520,7 @@ def load_settings() -> Settings:
         auto_trade_single_open = False
         auto_trade_max_open_pos = max(auto_trade_max_open_pos, 2)
         auto_trade_block_corr = True
+        auto_trade_max_same_dir = max(auto_trade_max_same_dir, 1)
         # If SL is enabled in env, keep it reasonably tight; wide SL + small TP makes expectancy negative.
         if at_sl > 1e-9:
             at_sl = min(at_sl, 40.0)
@@ -617,6 +622,8 @@ def load_settings() -> Settings:
         raise ValueError("RISK_MAX_TOTAL_NOTIONAL должен быть > 0")
     if auto_trade_max_open_pos < 0:
         raise ValueError("AUTO_TRADE_MAX_OPEN_POSITIONS должен быть >= 0 (0 — без лимита)")
+    if auto_trade_max_same_dir < 0:
+        raise ValueError("AUTO_TRADE_MAX_POSITIONS_SAME_DIRECTION должен быть >= 0 (0 — без лимита)")
 
     if strategy not in ("arbitrage", "scalping"):
         raise ValueError("BOT_STRATEGY должен быть arbitrage или scalping")
@@ -857,6 +864,7 @@ def load_settings() -> Settings:
         auto_trade_single_open_position=auto_trade_single_open,
         auto_trade_max_open_positions=auto_trade_max_open_pos,
         auto_trade_block_correlated_same_dir=auto_trade_block_corr,
+        auto_trade_max_positions_same_direction=auto_trade_max_same_dir,
         auto_trade_position_dust_quote=pos_dust_quote,
         auto_trade_tp_bps=at_tp,
         auto_trade_sl_bps=at_sl,

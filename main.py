@@ -293,6 +293,11 @@ async def run_loop() -> None:
             log.info(
                 "AUTO_TRADE: corr-block (paper) — блокируем BTC↔SOL в одну сторону (AUTO_TRADE_BLOCK_CORRELATED_SAME_DIR)"
             )
+        if settings.strategy == "scalping" and getattr(settings, "auto_trade_max_positions_same_direction", 0) > 0:
+            log.info(
+                "AUTO_TRADE: risk-dir (paper) — максимум позиций в одном направлении=%s (AUTO_TRADE_MAX_POSITIONS_SAME_DIRECTION)",
+                settings.auto_trade_max_positions_same_direction,
+            )
         if settings.auto_trade_max_hold_seconds > 0:
             log.info(
                 "AUTO_TRADE: MAX_HOLD=%.0fs; min net для отлож. таймера (только 0≤net<порог) long=%.1f short=%.1f bps; "
