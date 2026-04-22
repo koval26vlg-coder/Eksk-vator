@@ -479,6 +479,7 @@ class ScalpAutoTrader:
         age = now_mono - opened
         early_stop_s = float(getattr(self._s, "auto_trade_early_stop_seconds", 0.0) or 0.0)
         early_stop_loss = float(getattr(self._s, "auto_trade_early_stop_max_loss_net_bps", 0.0) or 0.0)
+        early_stop_min_age = float(getattr(self._s, "auto_trade_early_stop_min_age_seconds", 0.0) or 0.0)
 
         reason: str | None = None
         if tp > 0 and pnl_net_bps >= tp:
@@ -491,7 +492,13 @@ class ScalpAutoTrader:
                 )
             else:
                 reason = f"SL {pnl_bps:.1f}≤-{sl_eff:.1f} bps"
-        elif early_stop_s > 0 and early_stop_loss > 0 and age <= early_stop_s and pnl_net_bps <= -early_stop_loss:
+        elif (
+            early_stop_s > 0
+            and early_stop_loss > 0
+            and age + 1e-9 >= early_stop_min_age
+            and age <= early_stop_s
+            and pnl_net_bps <= -early_stop_loss
+        ):
             reason = (
                 f"EARLY_STOP net {pnl_net_bps:.1f}≤-{early_stop_loss:.1f} bps in {age:.0f}s≤{early_stop_s:.0f}s "
                 f"(raw≈{pnl_bps:.1f} fee≈{fee_side_bps:.1f})"

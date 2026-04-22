@@ -91,6 +91,8 @@ class Settings:
     auto_trade_early_stop_seconds: float
     #: Авто-выход (paper): порог раннего стопа по net‑PnL (bps, положительное число). 0 = выключить.
     auto_trade_early_stop_max_loss_net_bps: float
+    #: Авто-выход (paper): минимальный возраст позиции для EARLY_STOP (сек). Защита от мгновенного срабатывания на комиссиях.
+    auto_trade_early_stop_min_age_seconds: float
     #: Авто-выход: макс. время удержания позиции (сек); 0 = выкл.
     auto_trade_max_hold_seconds: float
     #: Авто-выход (paper): при мягком MAX_HOLD не закрывать «мелкий плюс» (net после fee на выход),
@@ -329,6 +331,7 @@ def load_settings() -> Settings:
     at_sl_atr_mult = float(os.getenv("AUTO_TRADE_SL_ATR_MULT", "0"))
     at_early_stop_s = float(os.getenv("AUTO_TRADE_EARLY_STOP_SECONDS", "0"))
     at_early_stop_loss = float(os.getenv("AUTO_TRADE_EARLY_STOP_MAX_LOSS_NET_BPS", "0"))
+    at_early_stop_min_age = float(os.getenv("AUTO_TRADE_EARLY_STOP_MIN_AGE_SECONDS", "0"))
     at_tp_allow_pending = os.getenv("AUTO_TRADE_TP_ALLOW_WITH_PENDING", "false").lower() in (
         "1",
         "true",
@@ -495,8 +498,9 @@ def load_settings() -> Settings:
         # TP should clear exit fee and still leave some net edge.
         # 8 bps net is often too small vs noise; target a bit more to offset occasional SL.
         at_tp = 18.0
-        # Filter weak signals (noise); stricter than default quality for «реже, плотнее».
-        min_impulse_at = 24.0
+        # Filter weak signals (noise). Для ta_trend импульсы часто 8–15 bps, поэтому в quality
+        # держим умеренно: дальше ужесточают TA (DI/ADX) и спред/ликвидность.
+        min_impulse_at = 16.0
         # TA trend confirmation: require stronger +DI/-DI separation.
         ta_min_di = 8.0
         # Снижаем триггер силы тренда: в спокойные часы ADX часто не добирает, а сигналов нет вовсе.
@@ -523,6 +527,8 @@ def load_settings() -> Settings:
         # Ранний invalidation: если идея "не пошла" в первые минуты — режем убыток рано (до большого SL).
         at_early_stop_s = 300.0
         at_early_stop_loss = 12.0
+        # Не закрываем "в ноль секунд" только из‑за комиссий/тик-шума.
+        at_early_stop_min_age = max(at_early_stop_min_age, 10.0)
         # Мягкий MAX_HOLD: не закрывать по таймеру, пока по стакану полный выход ещё «под TP»; потолок по возрасту — чтобы не ждать вечно.
         at_hold_book_tp_gate = True
         at_hold_book_tp_stale = 14400.0
@@ -881,6 +887,7 @@ def load_settings() -> Settings:
         auto_trade_sl_atr_mult=at_sl_atr_mult,
         auto_trade_early_stop_seconds=at_early_stop_s,
         auto_trade_early_stop_max_loss_net_bps=at_early_stop_loss,
+        auto_trade_early_stop_min_age_seconds=at_early_stop_min_age,
         auto_trade_max_hold_seconds=at_hold,
         auto_trade_max_hold_min_pnl_bps=at_hold_min_pnl,
         auto_trade_max_hold_min_pnl_bps_long=at_hold_min_pnl_long,
