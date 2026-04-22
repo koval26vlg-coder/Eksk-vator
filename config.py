@@ -189,6 +189,8 @@ class Settings:
     ta_regime_adx_trend: float
     #: Для ta_regime: hierarchy — ADX/BB как раньше; best_signal — среди трёх стратегий по силе импульса (одна сторона).
     ta_regime_mode: str
+    #: Для ta_regime: разрешать агрессивный режим (VWAP+VP). False = только trend/conservative (более "чистые" входы).
+    ta_regime_allow_aggressive: bool
     ta_regime_bb_squeeze_bps: float
     ta_band_near_bps: float
     ta_aggr_require_poc: bool
@@ -460,6 +462,12 @@ def load_settings() -> Settings:
     ta_trend_min_rsi_short = float(os.getenv("TA_TREND_MIN_RSI_SHORT", "0"))
     ta_trend_max_ext_short = float(os.getenv("TA_TREND_MAX_EXTEND_BPS_SHORT", "0"))
     ta_regime_mode = os.getenv("TA_REGIME_MODE", "hierarchy").strip().lower()
+    ta_regime_allow_aggr = os.getenv("TA_REGIME_ALLOW_AGGRESSIVE", "true").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
     # ---------------------------------------------------------------------
     # AUTO_TRADE profiles: one switch for a coherent parameter bundle.
@@ -482,6 +490,8 @@ def load_settings() -> Settings:
         # при согласованной стороне. Это заметно повышает частоту сигналов без перехода в "любой шум".
         variant = "ta_regime"
         ta_regime_mode = "best_signal"
+        # Quality: исключаем агрессивный режим (VWAP+VP) как более шумный.
+        ta_regime_allow_aggr = False
         # TP should clear exit fee and still leave some net edge.
         # 8 bps net is often too small vs noise; target a bit more to offset occasional SL.
         at_tp = 18.0
@@ -941,6 +951,7 @@ def load_settings() -> Settings:
         ta_aggr_eps_bps=ta_aggr_eps,
         ta_regime_adx_trend=ta_regime_adx,
         ta_regime_mode=ta_regime_mode,
+        ta_regime_allow_aggressive=ta_regime_allow_aggr,
         ta_regime_bb_squeeze_bps=ta_regime_bb_sq,
         ta_band_near_bps=ta_band_near,
         ta_aggr_require_poc=ta_aggr_poc,

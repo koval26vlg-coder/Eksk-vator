@@ -341,7 +341,11 @@ class ScalpingTARegime(ScalpingTAOhlcv):
             return None
         sig_t = self._trend.raw_signal(q, ohlcv, blk)
         sig_c = self._cons.raw_signal(q, ohlcv, blk)
-        sig_a = self._aggr.raw_signal(q, ohlcv, blk)
+        sig_a = (
+            self._aggr.raw_signal(q, ohlcv, blk)
+            if bool(getattr(self.settings, "ta_regime_allow_aggressive", True))
+            else None
+        )
         cands: list[tuple[ScalpSignal, Mode]] = []
         if sig_t is not None:
             cands.append((sig_t, "trend"))
@@ -397,6 +401,8 @@ class ScalpingTARegime(ScalpingTAOhlcv):
             mode = "conservative"
         else:
             mode = "aggressive"
+        if mode == "aggressive" and not bool(getattr(self.settings, "ta_regime_allow_aggressive", True)):
+            mode = "conservative"
         if self._last_mode.get(key) != mode:
             self._last_mode[key] = mode
             log.info("TA regime [%s]: режим → %s", q.symbol, mode)
