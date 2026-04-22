@@ -547,13 +547,14 @@ def load_settings() -> Settings:
         at_hold_skip_neg = 4.0
         # Жёсткий потолок (аварийный): закрыть позицию, если она живёт слишком долго.
         at_hold_hard = 14400.0
-        # Ранний invalidation: если идея "не пошла" в первые минуты — режем убыток рано (до большого SL).
-        at_early_stop_s = 300.0
+        # Ранний invalidation: режем только "плохие" входы, но не шум/комиссии.
+        # Важно: не делать его слишком чувствительным, иначе получаем churn и минус по fee.
+        at_early_stop_s = 180.0
         # ВАЖНО: используем raw‑порог, иначе net‑порог почти всегда сработает на -2×fee.
-        at_early_stop_loss_raw = 18.0
+        at_early_stop_loss_raw = 30.0
         at_early_stop_loss = max(at_early_stop_loss, 0.0)
-        # Не закрываем "в ноль секунд" только из‑за комиссий/тик-шума.
-        at_early_stop_min_age = max(at_early_stop_min_age, 10.0)
+        # Не закрываем слишком рано: даём позиции прожить хотя бы минуту.
+        at_early_stop_min_age = max(at_early_stop_min_age, 60.0)
         # Mid-phase invalidation: если после раннего окна позиция в заметном минусе и стакан/спред ухудшился —
         # лучше выйти, чем держать до HARD.
         at_mid_stop_start = max(at_mid_stop_start, 300.0)
