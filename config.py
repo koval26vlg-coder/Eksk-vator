@@ -98,6 +98,16 @@ class Settings:
     auto_trade_early_stop_min_age_seconds: float
     #: Авто-выход: макс. время удержания позиции (сек); 0 = выкл.
     auto_trade_max_hold_seconds: float
+    #: Авто-выход (paper): mid-phase invalidation — после N секунд разрешить закрытие,
+    #: если raw‑PnL хуже порога И рынок/стакан "плохой" для выхода (спред широкий или глубины не хватает).
+    auto_trade_mid_stop_start_seconds: float
+    #: Авто-выход (paper): порог mid-stop по raw‑PnL (bps, положительное число). 0 = выключить.
+    auto_trade_mid_stop_max_loss_raw_bps: float
+    #: Авто-выход (paper): считать стакан "тонким", если полный выход по глубине не влезает
+    #: или slippage по VWAP хуже лимита.
+    auto_trade_mid_stop_require_thin_book: bool
+    #: Авто-выход (paper): считать спред "широким", если spread_bps > ATR_bps×mult (0 = выключить).
+    auto_trade_mid_stop_wide_spread_atr_mult: float
     #: Авто-выход (paper): при мягком MAX_HOLD не закрывать «мелкий плюс» (net после fee на выход),
     #: пока net < порога и net >= 0; при net < 0 таймер всё равно закрывает. 0 = без порога.
     #: Базовое значение; если заданы *_LONG / *_SHORT — для соответствующей стороны берутся они.
@@ -336,6 +346,15 @@ def load_settings() -> Settings:
     at_early_stop_loss = float(os.getenv("AUTO_TRADE_EARLY_STOP_MAX_LOSS_NET_BPS", "0"))
     at_early_stop_loss_raw = float(os.getenv("AUTO_TRADE_EARLY_STOP_MAX_LOSS_RAW_BPS", "0"))
     at_early_stop_min_age = float(os.getenv("AUTO_TRADE_EARLY_STOP_MIN_AGE_SECONDS", "0"))
+    at_mid_stop_start = float(os.getenv("AUTO_TRADE_MID_STOP_START_SECONDS", "0"))
+    at_mid_stop_loss_raw = float(os.getenv("AUTO_TRADE_MID_STOP_MAX_LOSS_RAW_BPS", "0"))
+    at_mid_stop_thin = os.getenv("AUTO_TRADE_MID_STOP_REQUIRE_THIN_BOOK", "true").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    at_mid_stop_spread_atr_m = float(os.getenv("AUTO_TRADE_MID_STOP_WIDE_SPREAD_ATR_MULT", "0.35"))
     at_tp_allow_pending = os.getenv("AUTO_TRADE_TP_ALLOW_WITH_PENDING", "false").lower() in (
         "1",
         "true",
@@ -535,6 +554,12 @@ def load_settings() -> Settings:
         at_early_stop_loss = max(at_early_stop_loss, 0.0)
         # Не закрываем "в ноль секунд" только из‑за комиссий/тик-шума.
         at_early_stop_min_age = max(at_early_stop_min_age, 10.0)
+        # Mid-phase invalidation: если после раннего окна позиция в заметном минусе и стакан/спред ухудшился —
+        # лучше выйти, чем держать до HARD.
+        at_mid_stop_start = max(at_mid_stop_start, 300.0)
+        at_mid_stop_loss_raw = max(at_mid_stop_loss_raw, 30.0)
+        at_mid_stop_thin = True
+        at_mid_stop_spread_atr_m = max(at_mid_stop_spread_atr_m, 0.35)
         # Мягкий MAX_HOLD: не закрывать по таймеру, пока по стакану полный выход ещё «под TP»; потолок по возрасту — чтобы не ждать вечно.
         at_hold_book_tp_gate = True
         at_hold_book_tp_stale = 14400.0
@@ -896,6 +921,10 @@ def load_settings() -> Settings:
         auto_trade_early_stop_max_loss_raw_bps=at_early_stop_loss_raw,
         auto_trade_early_stop_min_age_seconds=at_early_stop_min_age,
         auto_trade_max_hold_seconds=at_hold,
+        auto_trade_mid_stop_start_seconds=at_mid_stop_start,
+        auto_trade_mid_stop_max_loss_raw_bps=at_mid_stop_loss_raw,
+        auto_trade_mid_stop_require_thin_book=at_mid_stop_thin,
+        auto_trade_mid_stop_wide_spread_atr_mult=at_mid_stop_spread_atr_m,
         auto_trade_max_hold_min_pnl_bps=at_hold_min_pnl,
         auto_trade_max_hold_min_pnl_bps_long=at_hold_min_pnl_long,
         auto_trade_max_hold_min_pnl_bps_short=at_hold_min_pnl_short,

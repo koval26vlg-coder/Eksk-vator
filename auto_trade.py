@@ -481,6 +481,10 @@ class ScalpAutoTrader:
         early_stop_loss = float(getattr(self._s, "auto_trade_early_stop_max_loss_net_bps", 0.0) or 0.0)
         early_stop_loss_raw = float(getattr(self._s, "auto_trade_early_stop_max_loss_raw_bps", 0.0) or 0.0)
         early_stop_min_age = float(getattr(self._s, "auto_trade_early_stop_min_age_seconds", 0.0) or 0.0)
+        mid_stop_start = float(getattr(self._s, "auto_trade_mid_stop_start_seconds", 0.0) or 0.0)
+        mid_stop_loss_raw = float(getattr(self._s, "auto_trade_mid_stop_max_loss_raw_bps", 0.0) or 0.0)
+        mid_stop_thin = bool(getattr(self._s, "auto_trade_mid_stop_require_thin_book", True))
+        mid_stop_spread_atr_m = float(getattr(self._s, "auto_trade_mid_stop_wide_spread_atr_mult", 0.0) or 0.0)
 
         reason: str | None = None
         if tp > 0 and pnl_net_bps >= tp:
@@ -512,6 +516,44 @@ class ScalpAutoTrader:
                     f"EARLY_STOP net {pnl_net_bps:.1f}≤-{early_stop_loss:.1f} bps in {age:.0f}s≤{early_stop_s:.0f}s "
                     f"(raw≈{pnl_bps:.1f} fee≈{fee_side_bps:.1f})"
                 )
+        elif mid_stop_start > 0 and mid_stop_loss_raw > 0 and age >= mid_stop_start and pnl_bps <= -mid_stop_loss_raw:
+            # Mid-phase invalidation: позиция уже "созрела" (не первые секунды),
+            # и при этом убыточна заметно; закрываем только если выход объективно ухудшился.
+            sp_bps = spread_bps(best_bid, best_ask)
+            wide_spread = False
+            if atr_bps is not None and atr_bps > 1e-9 and mid_stop_spread_atr_m > 0:
+                wide_spread = sp_bps > float(atr_bps) * mid_stop_spread_atr_m + 1e-9
+
+            thin_book = False
+            if mid_stop_thin:
+                max_slip = float(self._s.scalping_max_slippage_bps)
+                amt = abs(float(pos))
+                if pos > 0:
+                    _q, vwap, _sold, complete = vwap_sell_base(bids, amt)
+                    if not complete:
+                        thin_book = True
+                    else:
+                        slip = simulated_slippage_bps_sell(best_bid, float(vwap), mid)
+                        thin_book = slip > max_slip + 1e-9
+                else:
+                    _q, vwap, _bought, complete = vwap_buy_base(asks, amt)
+                    if not complete:
+                        thin_book = True
+                    else:
+                        slip = simulated_slippage_bps_buy(best_ask, float(vwap), mid)
+                        thin_book = slip > max_slip + 1e-9
+
+            if wide_spread or thin_book:
+                self._ana_inc("mid_stop", exchange_id, sym)
+                why = []
+                if wide_spread:
+                    if atr_bps is not None and atr_bps > 0 and mid_stop_spread_atr_m > 0:
+                        why.append(f"spread {sp_bps:.2f}bps>ATR×{mid_stop_spread_atr_m:.2f} (ATR≈{float(atr_bps):.1f})")
+                    else:
+                        why.append(f"spread {sp_bps:.2f}bps wide")
+                if thin_book:
+                    why.append("thin_book")
+                reason = f"MID_STOP raw {pnl_bps:.1f}≤-{mid_stop_loss_raw:.1f} bps age={age:.0f}s (" + ", ".join(why) + ")"
         else:
             if hold_hard > 0 and age >= hold_hard:
                 reason = f"MAX_HOLD_HARD {age:.0f}s≥{hold_hard:.0f}s"
