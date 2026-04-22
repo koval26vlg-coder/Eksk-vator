@@ -29,6 +29,8 @@ log = logging.getLogger(__name__)
 class _AutoTradeAnalytics:
     """Простая сессионная аналитика причин пропусков/блокировок в auto_trade."""
 
+    _META_PREFIXES = ("vol_regime_",)
+
     def __init__(self) -> None:
         self._counts: dict[str, int] = {}
         self._by_symbol: dict[tuple[str, str], dict[str, int]] = {}
@@ -44,11 +46,19 @@ class _AutoTradeAnalytics:
         if not self._counts:
             return []
 
+        def _is_meta(reason: str) -> bool:
+            r = str(reason)
+            return any(r.startswith(p) for p in self._META_PREFIXES)
+
         lines: list[str] = []
-        total = sum(self._counts.values())
+        total = sum(c for r, c in self._counts.items() if not _is_meta(r))
         lines.append(f"auto_trade-отчёт: skip/block events={total}")
 
-        reasons = sorted(self._counts.items(), key=lambda kv: kv[1], reverse=True)
+        reasons = sorted(
+            [(r, c) for r, c in self._counts.items() if not _is_meta(r)],
+            key=lambda kv: kv[1],
+            reverse=True,
+        )
         lines.append("auto_trade-отчёт: топ причин (count↓):")
         for r, c in reasons[: max(1, int(top_reasons))]:
             lines.append(f"  - {r}: {int(c)}")
@@ -56,12 +66,16 @@ class _AutoTradeAnalytics:
         # Top symbols by total events
         sym_rows: list[tuple[int, tuple[str, str], dict[str, int]]] = []
         for k, m in self._by_symbol.items():
-            sym_rows.append((sum(m.values()), k, m))
+            sym_rows.append((sum(c for r, c in m.items() if not _is_meta(r)), k, m))
         sym_rows.sort(key=lambda x: x[0], reverse=True)
         if sym_rows:
             lines.append("auto_trade-отчёт: топ инструментов по числу событий (count↓):")
             for cnt, (ex, sym), m in sym_rows[: max(1, int(top_symbols))]:
-                top = sorted(m.items(), key=lambda kv: kv[1], reverse=True)[:3]
+                top = sorted(
+                    [(r, c) for r, c in m.items() if not _is_meta(r)],
+                    key=lambda kv: kv[1],
+                    reverse=True,
+                )[:3]
                 tail = ", ".join(f"{r}={c}" for r, c in top)
                 lines.append(f"  - {ex} {sym}: {int(cnt)} ({tail})")
 
@@ -1331,7 +1345,8 @@ class ScalpAutoTrader:
             eff_atr_spread_mult *= 0.85
             self._ana_inc("vol_regime_volatile", exchange_id, q.symbol)
         elif is_calm and not is_volatile:
-            eff_min_imp *= 0.75
+            # Calm → чуть агрессивнее: иначе даже trend-сигналы 8–12bps часто не проходят.
+            eff_min_imp *= 0.70
             eff_thr_range *= 0.85
             eff_atr_spread_mult *= 1.10
             self._ana_inc("vol_regime_calm", exchange_id, q.symbol)
