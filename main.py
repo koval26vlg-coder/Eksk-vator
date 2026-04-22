@@ -284,6 +284,15 @@ async def run_loop() -> None:
                 "AUTO_TRADE: single-open (paper) — не открываем новую пару, пока по другой есть позиция "
                 "(AUTO_TRADE_SINGLE_OPEN_POSITION; в профиле quality включено по умолчанию)"
             )
+        if settings.strategy == "scalping" and getattr(settings, "auto_trade_max_open_positions", 0) > 0:
+            log.info(
+                "AUTO_TRADE: риск-слоты (paper) — максимум позиций=%s (AUTO_TRADE_MAX_OPEN_POSITIONS)",
+                settings.auto_trade_max_open_positions,
+            )
+        if settings.strategy == "scalping" and getattr(settings, "auto_trade_block_correlated_same_dir", False):
+            log.info(
+                "AUTO_TRADE: corr-block (paper) — блокируем BTC↔SOL в одну сторону (AUTO_TRADE_BLOCK_CORRELATED_SAME_DIR)"
+            )
         if settings.auto_trade_max_hold_seconds > 0:
             log.info(
                 "AUTO_TRADE: MAX_HOLD=%.0fs; min net для отлож. таймера (только 0≤net<порог) long=%.1f short=%.1f bps; "

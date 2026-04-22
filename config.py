@@ -71,6 +71,10 @@ class Settings:
     auto_trade_reduce_only_scope: str
     #: Paper: не открывать новую пару, пока по другой паре уже есть не-пылевая позиция (снижает скоррелированные дубли BTC+ETH).
     auto_trade_single_open_position: bool
+    #: Paper: максимум одновременно открытых позиций (по ногам). 0 = без лимита.
+    auto_trade_max_open_positions: int
+    #: Paper: блокировать одновременные позиции в одном направлении на коррелирующих парах (BTC<->SOL).
+    auto_trade_block_correlated_same_dir: bool
     #: Reduce-only/exit: считать позицию "пылью", если |pos_base|×mid < порога (в quote, напр. USDT). 0 = выкл.
     auto_trade_position_dust_quote: float
     #: Авто-выход: take-profit в bps от цены входа; 0 = выкл.
@@ -290,6 +294,13 @@ def load_settings() -> Settings:
         "yes",
         "on",
     )
+    auto_trade_max_open_pos = int(float(os.getenv("AUTO_TRADE_MAX_OPEN_POSITIONS", "0")))
+    auto_trade_block_corr = os.getenv("AUTO_TRADE_BLOCK_CORRELATED_SAME_DIR", "true").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
     pos_dust_quote = float(os.getenv("AUTO_TRADE_POSITION_DUST_QUOTE", "0"))
     at_tp = float(os.getenv("AUTO_TRADE_TP_BPS", "0"))
     at_sl = float(os.getenv("AUTO_TRADE_SL_BPS", "0"))
@@ -501,8 +512,10 @@ def load_settings() -> Settings:
         # Мягкий MAX_HOLD: не закрывать по таймеру, пока по стакану полный выход ещё «под TP»; потолок по возрасту — чтобы не ждать вечно.
         at_hold_book_tp_gate = True
         at_hold_book_tp_stale = 14400.0
-        # One paper position across symbols — avoids simultaneous BTC+ETH longs both dying on timer.
-        auto_trade_single_open = True
+        # Вместо single-open используем 2 «слота» и блокируем BTC↔SOL в одну сторону (корреляция).
+        auto_trade_single_open = False
+        auto_trade_max_open_pos = max(auto_trade_max_open_pos, 2)
+        auto_trade_block_corr = True
         # If SL is enabled in env, keep it reasonably tight; wide SL + small TP makes expectancy negative.
         if at_sl > 1e-9:
             at_sl = min(at_sl, 40.0)
@@ -602,6 +615,8 @@ def load_settings() -> Settings:
         raise ValueError("RISK_MAX_OPEN_ORDERS должен быть >= 1")
     if risk_total <= 0:
         raise ValueError("RISK_MAX_TOTAL_NOTIONAL должен быть > 0")
+    if auto_trade_max_open_pos < 0:
+        raise ValueError("AUTO_TRADE_MAX_OPEN_POSITIONS должен быть >= 0 (0 — без лимита)")
 
     if strategy not in ("arbitrage", "scalping"):
         raise ValueError("BOT_STRATEGY должен быть arbitrage или scalping")
@@ -840,6 +855,8 @@ def load_settings() -> Settings:
         auto_trade_reduce_only=auto_trade_reduce_only,
         auto_trade_reduce_only_scope=auto_trade_ro_scope,
         auto_trade_single_open_position=auto_trade_single_open,
+        auto_trade_max_open_positions=auto_trade_max_open_pos,
+        auto_trade_block_correlated_same_dir=auto_trade_block_corr,
         auto_trade_position_dust_quote=pos_dust_quote,
         auto_trade_tp_bps=at_tp,
         auto_trade_sl_bps=at_sl,

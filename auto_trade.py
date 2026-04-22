@@ -1411,30 +1411,70 @@ class ScalpAutoTrader:
                         )
                         return
 
-        # Paper: одна не-пылевая позиция на все пары — не открываем вторую (см. AUTO_TRADE_SINGLE_OPEN_POSITION / quality).
-        if self._s.paper and bool(getattr(self._s, "auto_trade_single_open_position", False)):
+        # Paper: "риск-слоты" по позициям вместо single-open.
+        # - max_open_positions: лимит одновременных позиций (не заявок).
+        # - correlated_same_dir: не держать BTC и SOL в одну сторону одновременно (корреляция).
+        if self._s.paper:
             nowm = time.monotonic()
+            single_open = bool(getattr(self._s, "auto_trade_single_open_position", False))
+            max_pos = int(getattr(self._s, "auto_trade_max_open_positions", 0) or 0)
+            block_corr = bool(getattr(self._s, "auto_trade_block_correlated_same_dir", False))
+
+            want_dir = 1 if sig.side == "buy" else -1
+            corr_group = {"BTC/USDT", "SOL/USDT"}
+
+            non_dust: list[tuple[str, str, float]] = []
             for ex, sym, o_pos, o_entry in self._ex.paper_open_positions() or []:
-                if ex == exchange_id and sym == q.symbol:
+                if abs(o_pos) <= 1e-12:
                     continue
                 ref_mid = float(self._last_mid.get((str(ex), str(sym)), 0.0) or 0.0)
                 if ref_mid <= 0 and o_entry and float(o_entry) > 0:
                     ref_mid = float(o_entry)
-                if abs(o_pos) <= 1e-12:
-                    continue
                 if ref_mid > 0 and self._pos_is_dust(o_pos, ref_mid):
                     continue
-                self._ana_inc("single_open_position", exchange_id, q.symbol)
-                if self._entry_skip_log_ok("single_open", exchange_id, q.symbol, nowm):
-                    self._log.info(
-                        "auto_trade: single-open — уже есть позиция %s %s (pos≈%.8f), новый вход %s %s пропускаем",
-                        sym,
-                        ex,
-                        o_pos,
-                        q.symbol,
-                        exchange_id,
-                    )
-                return
+                non_dust.append((str(ex), str(sym), float(o_pos)))
+
+            # Back-compat: single-open = max 1 позиция на все пары.
+            eff_max_pos = 1 if single_open else max_pos
+            if eff_max_pos > 0:
+                other_pos = [
+                    (ex, sym, o_pos)
+                    for ex, sym, o_pos in non_dust
+                    if not (ex == exchange_id and sym == q.symbol)
+                ]
+                if len(other_pos) >= eff_max_pos:
+                    self._ana_inc("risk_slots_full", exchange_id, q.symbol)
+                    if self._entry_skip_log_ok("risk_slots_full", exchange_id, q.symbol, nowm):
+                        self._log.info(
+                            "auto_trade: risk-slots — уже есть %d позиций (лимит %d), новый вход %s %s пропускаем",
+                            len(other_pos),
+                            eff_max_pos,
+                            q.symbol,
+                            exchange_id,
+                        )
+                    return
+
+            if block_corr and q.symbol in corr_group:
+                for ex, sym, o_pos in non_dust:
+                    if ex == exchange_id and sym == q.symbol:
+                        continue
+                    if sym not in corr_group:
+                        continue
+                    have_dir = 1 if o_pos > 0 else -1
+                    if have_dir == want_dir:
+                        self._ana_inc("corr_same_dir_block", exchange_id, q.symbol)
+                        if self._entry_skip_log_ok("corr_same_dir", exchange_id, q.symbol, nowm):
+                            self._log.info(
+                                "auto_trade: corr-block — уже есть %s %s dir=%s (pos≈%.8f), новый вход %s %s dir=%s пропускаем",
+                                sym,
+                                ex,
+                                "long" if have_dir > 0 else "short",
+                                o_pos,
+                                q.symbol,
+                                exchange_id,
+                                "long" if want_dir > 0 else "short",
+                            )
+                        return
 
         if self._s.scalping_cancel_previous_orders:
             await self._cancel_pending(exchange_id, q.symbol)
