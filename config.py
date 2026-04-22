@@ -91,6 +91,9 @@ class Settings:
     auto_trade_early_stop_seconds: float
     #: Авто-выход (paper): порог раннего стопа по net‑PnL (bps, положительное число). 0 = выключить.
     auto_trade_early_stop_max_loss_net_bps: float
+    #: Авто-выход (paper): порог раннего стопа по raw‑PnL (bps, положительное число). 0 = выключить.
+    #: Если задано — предпочтительнее net‑порога (иначе net режет сделку на -2×fee).
+    auto_trade_early_stop_max_loss_raw_bps: float
     #: Авто-выход (paper): минимальный возраст позиции для EARLY_STOP (сек). Защита от мгновенного срабатывания на комиссиях.
     auto_trade_early_stop_min_age_seconds: float
     #: Авто-выход: макс. время удержания позиции (сек); 0 = выкл.
@@ -331,6 +334,7 @@ def load_settings() -> Settings:
     at_sl_atr_mult = float(os.getenv("AUTO_TRADE_SL_ATR_MULT", "0"))
     at_early_stop_s = float(os.getenv("AUTO_TRADE_EARLY_STOP_SECONDS", "0"))
     at_early_stop_loss = float(os.getenv("AUTO_TRADE_EARLY_STOP_MAX_LOSS_NET_BPS", "0"))
+    at_early_stop_loss_raw = float(os.getenv("AUTO_TRADE_EARLY_STOP_MAX_LOSS_RAW_BPS", "0"))
     at_early_stop_min_age = float(os.getenv("AUTO_TRADE_EARLY_STOP_MIN_AGE_SECONDS", "0"))
     at_tp_allow_pending = os.getenv("AUTO_TRADE_TP_ALLOW_WITH_PENDING", "false").lower() in (
         "1",
@@ -526,7 +530,9 @@ def load_settings() -> Settings:
         at_hold_hard = 14400.0
         # Ранний invalidation: если идея "не пошла" в первые минуты — режем убыток рано (до большого SL).
         at_early_stop_s = 300.0
-        at_early_stop_loss = 12.0
+        # ВАЖНО: используем raw‑порог, иначе net‑порог почти всегда сработает на -2×fee.
+        at_early_stop_loss_raw = 18.0
+        at_early_stop_loss = max(at_early_stop_loss, 0.0)
         # Не закрываем "в ноль секунд" только из‑за комиссий/тик-шума.
         at_early_stop_min_age = max(at_early_stop_min_age, 10.0)
         # Мягкий MAX_HOLD: не закрывать по таймеру, пока по стакану полный выход ещё «под TP»; потолок по возрасту — чтобы не ждать вечно.
@@ -887,6 +893,7 @@ def load_settings() -> Settings:
         auto_trade_sl_atr_mult=at_sl_atr_mult,
         auto_trade_early_stop_seconds=at_early_stop_s,
         auto_trade_early_stop_max_loss_net_bps=at_early_stop_loss,
+        auto_trade_early_stop_max_loss_raw_bps=at_early_stop_loss_raw,
         auto_trade_early_stop_min_age_seconds=at_early_stop_min_age,
         auto_trade_max_hold_seconds=at_hold,
         auto_trade_max_hold_min_pnl_bps=at_hold_min_pnl,
