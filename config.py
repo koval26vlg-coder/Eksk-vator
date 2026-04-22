@@ -478,7 +478,7 @@ def load_settings() -> Settings:
         atr_not_ref = 20.0
         atr_not_floor = 0.25
         # Longer hold: ta_trend + TP net 8 bps often need more than 10m; user OK to wait for a winning exit.
-        at_hold = 1800.0
+        at_hold = 1200.0
         at_hold_min_pnl = 3.0
         at_hold_min_pnl_long = at_hold_min_pnl
         at_hold_min_pnl_short = at_hold_min_pnl
