@@ -65,6 +65,10 @@ class Settings:
     auto_trade_cooldown_scope: str
     #: Скальпинг+AUTO_TRADE: потолок одновременных заявок (None = только RISK_*).
     auto_trade_max_open_orders: int | None
+    #: Anti-churn: после закрытия позиции не входить повторно в ту же сторону по символу N секунд. 0 = выкл.
+    auto_trade_reentry_cooldown_seconds: float
+    #: Anti-churn: override для SOL (0 = использовать общий reentry_cooldown).
+    auto_trade_reentry_cooldown_seconds_sol: float
     #: Скальпинг+AUTO_TRADE: не наращивать позицию; если позиция есть — только уменьшающие ордера (reduce-only по смыслу).
     auto_trade_reduce_only: bool
     #: Reduce-only область: exchange_symbol/leg (по бирже+паре) или symbol (глобально по паре на всех биржах).
@@ -300,6 +304,8 @@ def load_settings() -> Settings:
         raise ValueError("AUTO_TRADE_COOLDOWN_SCOPE: symbol | exchange_symbol")
     _raw_at_moo = os.getenv("AUTO_TRADE_MAX_OPEN_ORDERS", "").strip()
     auto_trade_max_open: int | None = int(_raw_at_moo) if _raw_at_moo else None
+    at_reentry_cd = float(os.getenv("AUTO_TRADE_REENTRY_COOLDOWN_SECONDS", "0"))
+    at_reentry_cd_sol = float(os.getenv("AUTO_TRADE_REENTRY_COOLDOWN_SECONDS_SOL", "0"))
     auto_trade_reduce_only = os.getenv("AUTO_TRADE_REDUCE_ONLY", "false").lower() in ("1", "true", "yes", "on")
     _raw_ro_scope = os.getenv("AUTO_TRADE_REDUCE_ONLY_SCOPE", "exchange_symbol").strip().lower()
     if _raw_ro_scope in ("symbol", "global", "per_symbol"):
@@ -577,6 +583,9 @@ def load_settings() -> Settings:
             at_sl_atr_mult = max(at_sl_atr_mult, 1.10)
         # Fewer re-entries after a fill / timer exit (env can set higher).
         auto_trade_cooldown = max(auto_trade_cooldown, 45.0)
+        # Anti-churn: после выхода не перезаходим в ту же сторону. Для SOL — чуть дольше (больше "шум" и комиссионный churn).
+        at_reentry_cd = max(at_reentry_cd, 180.0)
+        at_reentry_cd_sol = max(at_reentry_cd_sol, 240.0)
         # AUTO_TUNE quiet-market threshold: slightly above default mix so flat tape skips more often.
         # В quality отключаем AUTO_TUNE-quiet gate: он часто душит хорошие TA-сигналы при TP=18.
         # Качество входа держим через min_impulse + TA + ATR×spread.
@@ -907,6 +916,8 @@ def load_settings() -> Settings:
         auto_trade_cooldown_seconds=auto_trade_cooldown,
         auto_trade_cooldown_scope=auto_trade_cd_scope,
         auto_trade_max_open_orders=auto_trade_max_open,
+        auto_trade_reentry_cooldown_seconds=at_reentry_cd,
+        auto_trade_reentry_cooldown_seconds_sol=at_reentry_cd_sol,
         auto_trade_reduce_only=auto_trade_reduce_only,
         auto_trade_reduce_only_scope=auto_trade_ro_scope,
         auto_trade_single_open_position=auto_trade_single_open,

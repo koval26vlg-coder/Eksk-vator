@@ -98,6 +98,9 @@ class ScalpAutoTrader:
         self._log = logger
         self._atr_bps_provider = atr_bps_provider
         self._last_mono: dict[tuple[str, str], float] = {}
+        # Anti-churn: после выхода по символу не входить повторно в ту же сторону N секунд.
+        # Ключ: cooldown_key(exchange_id,symbol) + side ("buy"/"sell").
+        self._last_exit_side_mono: dict[tuple[str, str, str], float] = {}
         self._pending_order_ids: dict[tuple[str, str], list[str]] = {}
         # pending-тип ордера: "entry" | "exit" (нужно, чтобы cancel_pending перед SL/MAX_HOLD не снимал свежий exit)
         self._pending_kind: dict[str, str] = {}
@@ -707,6 +710,9 @@ class ScalpAutoTrader:
                 self._ana_inc("exit_place_limit_rejected", exchange_id, sym)
             return
         self._register_order(exchange_id, sym, order, kind="exit")
+        # Anti-churn: после постановки выхода запрещаем повторный вход в исходную сторону позиции.
+        blocked_entry_side = "buy" if pos > 0 else "sell"
+        self._mark_exit_side(exchange_id, sym, blocked_entry_side, now_mono)
         self._mark(exchange_id, sym)
 
     def note_quote_for_vol_scale(self, exchange_id: str, q: Quote) -> None:
@@ -977,6 +983,26 @@ class ScalpAutoTrader:
 
     def _mark(self, exchange_id: str, symbol: str) -> None:
         self._last_mono[self._cooldown_key(exchange_id, symbol)] = time.monotonic()
+
+    def _reentry_cd_seconds(self, symbol: str) -> float:
+        cd = float(getattr(self._s, "auto_trade_reentry_cooldown_seconds", 0.0) or 0.0)
+        if symbol.upper().startswith("SOL/"):
+            cd_sol = float(getattr(self._s, "auto_trade_reentry_cooldown_seconds_sol", 0.0) or 0.0)
+            if cd_sol > 0:
+                return cd_sol
+        return cd
+
+    def _reentry_ok(self, exchange_id: str, symbol: str, side: str, now_mono: float) -> bool:
+        cd = self._reentry_cd_seconds(symbol)
+        if cd <= 0:
+            return True
+        k = (*self._cooldown_key(exchange_id, symbol), side)
+        prev = float(self._last_exit_side_mono.get(k, 0.0) or 0.0)
+        return (now_mono - prev) >= cd
+
+    def _mark_exit_side(self, exchange_id: str, symbol: str, blocked_entry_side: str, now_mono: float) -> None:
+        k = (*self._cooldown_key(exchange_id, symbol), blocked_entry_side)
+        self._last_exit_side_mono[k] = now_mono
 
     async def _cancel_pending(self, exchange_id: str, symbol: str) -> None:
         key = (exchange_id, symbol)
@@ -1284,6 +1310,13 @@ class ScalpAutoTrader:
         if not self._cooldown_ok(exchange_id, q.symbol):
             self._ana_inc("cooldown", exchange_id, q.symbol)
             self._log.debug("auto_trade: кулдаун %s %s", exchange_id, q.symbol)
+            return
+
+        # Anti-churn: после выхода по символу не заходим повторно в ту же сторону.
+        now_mono = time.monotonic()
+        if not self._reentry_ok(exchange_id, q.symbol, sig.side, now_mono):
+            self._ana_inc("reentry_cooldown", exchange_id, q.symbol)
+            self._log.debug("auto_trade: reentry_cooldown %s %s %s", exchange_id, q.symbol, sig.side)
             return
 
         # Quiet-market guard: если рынок «тихий» (диапазон mid за окно слишком мал), не открываем новые входы.
