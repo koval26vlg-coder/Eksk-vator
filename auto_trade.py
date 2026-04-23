@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import statistics
 import time
@@ -24,6 +25,24 @@ from scalping import ScalpSignal
 from scanner import Opportunity, Quote
 
 log = logging.getLogger(__name__)
+
+# region agent log
+def _dbg_log(hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
+    try:
+        payload = {
+            "sessionId": "fd290c",
+            "runId": "pre-change",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open("debug-fd290c.log", "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+# endregion agent log
 
 
 class _AutoTradeAnalytics:
@@ -97,6 +116,21 @@ class ScalpAutoTrader:
         self._ex = executor
         self._log = logger
         self._atr_bps_provider = atr_bps_provider
+        # region agent log
+        _dbg_log(
+            "H1",
+            "auto_trade.py:ScalpAutoTrader.__init__",
+            "settings snapshot",
+            {
+                "paper": bool(getattr(settings, "paper", False)),
+                "symbols": list(getattr(settings, "symbols", ()) or ()),
+                "reduce_only": bool(getattr(settings, "auto_trade_reduce_only", False)),
+                "reduce_only_scope": str(getattr(settings, "auto_trade_reduce_only_scope", "")),
+                "max_open_positions": int(getattr(settings, "auto_trade_max_open_positions", 0) or 0),
+                "max_same_dir": int(getattr(settings, "auto_trade_max_positions_same_direction", 0) or 0),
+            },
+        )
+        # endregion agent log
         self._last_mono: dict[tuple[str, str], float] = {}
         # Anti-churn: после выхода по символу не входить повторно в ту же сторону N секунд.
         # Ключ: cooldown_key(exchange_id,symbol) + side ("buy"/"sell").
@@ -1571,6 +1605,22 @@ class ScalpAutoTrader:
                         same_dir += 1
                 if same_dir >= max_same_dir:
                     self._ana_inc("risk_same_dir_full", exchange_id, q.symbol)
+                    # region agent log
+                    _dbg_log(
+                        "H1",
+                        "auto_trade.py:_on_signal_impl:risk_same_dir_full",
+                        "blocked by same-direction limit",
+                        {
+                            "symbol": str(q.symbol),
+                            "exchange_id": str(exchange_id),
+                            "sig_side": str(sig.side),
+                            "want_dir": int(want_dir),
+                            "same_dir": int(same_dir),
+                            "limit": int(max_same_dir),
+                            "open_non_dust": [(ex, sym, 1 if pos > 0 else -1) for ex, sym, pos in non_dust],
+                        },
+                    )
+                    # endregion agent log
                     if self._entry_skip_log_ok("risk_same_dir_full", exchange_id, q.symbol, nowm):
                         self._log.info(
                             "auto_trade: risk-dir — уже есть %d позиций dir=%s (лимит %d), новый вход %s %s пропускаем",

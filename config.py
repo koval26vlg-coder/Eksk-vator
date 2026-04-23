@@ -574,7 +574,7 @@ def load_settings() -> Settings:
         auto_trade_single_open = False
         auto_trade_max_open_pos = max(auto_trade_max_open_pos, 2)
         auto_trade_block_corr = True
-        auto_trade_max_same_dir = max(auto_trade_max_same_dir, 1)
+        auto_trade_max_same_dir = max(auto_trade_max_same_dir, 2)
         # If SL is enabled in env, keep it reasonably tight; wide SL + small TP makes expectancy negative.
         if at_sl > 1e-9:
             at_sl = min(at_sl, 40.0)
