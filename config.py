@@ -542,9 +542,9 @@ def load_settings() -> Settings:
         # ATR→notional: shrink exposure when ATR is high; keep a small floor.
         atr_not_ref = 20.0
         atr_not_floor = 0.25
-        # Soft MAX_HOLD в quality отключаем: таймерные закрытия часто фиксируют минус/комиссии.
-        # Оставляем только аварийный HARD как страховку от «вечного» зависания.
-        at_hold = 0.0
+        # MAX_HOLD: закрывать «залипшие» позиции, если TP/SL/stop'ы не сработали.
+        # Делаем мягкий таймер умеренным, чтобы не превращать его в churn.
+        at_hold = max(at_hold, 1800.0)
         at_hold_min_pnl = 3.0
         at_hold_min_pnl_long = at_hold_min_pnl
         at_hold_min_pnl_short = at_hold_min_pnl
@@ -552,7 +552,7 @@ def load_settings() -> Settings:
         # С потолком по возрасту (at_hold_book_tp_stale) позиция всё равно не «зависнет» навечно.
         at_hold_skip_neg = 4.0
         # Жёсткий потолок (аварийный): закрыть позицию, если она живёт слишком долго.
-        at_hold_hard = 14400.0
+        at_hold_hard = max(at_hold_hard, 7200.0)
         # Ранний invalidation: режем только "плохие" входы, но не шум/комиссии.
         # Важно: не делать его слишком чувствительным, иначе получаем churn и минус по fee.
         at_early_stop_s = 180.0
