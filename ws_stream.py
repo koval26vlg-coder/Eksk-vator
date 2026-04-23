@@ -390,8 +390,11 @@ async def run_scalping_ws(
                     if ob:
                         await scalp_trader.on_tick(ex_id, sym, ob)
 
+    sidecar_task: asyncio.Task[Any] | None = None
     if executor and scalp_trader and settings.auto_trade and not settings.paper:
-        asyncio.create_task(rest_sidecar_pending())
+        # Важно: держим ссылку на задачу и отменяем её вместе с остальными watcher'ами.
+        # Иначе на остановке event loop может оборвать её посреди aiohttp/ccxt вызова и оставить "Unclosed client session".
+        sidecar_task = asyncio.create_task(rest_sidecar_pending())
 
     async def ws_heartbeat() -> None:
         iv = float(settings.scalping_ws_heartbeat_seconds)
@@ -452,7 +455,7 @@ async def run_scalping_ws(
             settings.orderflow_tape_window_seconds,
         )
 
-    watchers = [
+    watchers: list[asyncio.Task[Any]] = [
         asyncio.create_task(
             run_watch_tasks(
                 eid,
@@ -464,6 +467,8 @@ async def run_scalping_ws(
         )
         for eid in settings.exchanges
     ]
+    if sidecar_task is not None:
+        watchers.append(sidecar_task)
     if settings.scalping_ws_heartbeat_seconds > 0:
         watchers.append(asyncio.create_task(ws_heartbeat()))
     await _gather_ws_watchers(watchers)
