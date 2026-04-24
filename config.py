@@ -137,6 +137,8 @@ class Settings:
     #: 0 = выкл.
     auto_trade_max_hold_smart_force_exit_if_pnl_net_le_bps: float
     #: Smart MAX_HOLD: применять defer только если net‑PnL (bps) ≤ порога (обычно небольшой плюс/около 0).
+    #: Нижняя граница defer-коридора берётся из auto_trade_max_hold_skip_if_pnl_net_ge_neg_bps:
+    #: деферим только когда pnl_net в диапазоне примерно [-SKIP_NEG .. +DEFER_IF_PNL_NET_LE].
     #: 0 = выключить ограничение.
     auto_trade_max_hold_smart_defer_if_pnl_net_le_bps: float
     #: Smart MAX_HOLD: разрешить defer даже без свежего TA-сигнала (например, если OHLCV временно не доступен),

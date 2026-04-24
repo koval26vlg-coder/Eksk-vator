@@ -48,7 +48,7 @@ def _dbg_log(hypothesis_id: str, location: str, message: str, data: dict[str, An
 class _AutoTradeAnalytics:
     """Простая сессионная аналитика причин пропусков/блокировок в auto_trade."""
 
-    _META_PREFIXES = ("vol_regime_",)
+    _META_PREFIXES = ("vol_regime_", "exit_max_hold_defer_")
 
     def __init__(self) -> None:
         self._counts: dict[str, int] = {}
@@ -630,10 +630,15 @@ class ScalpAutoTrader:
                 smart_allow_no_sig = bool(
                     getattr(self._s, "auto_trade_max_hold_smart_allow_without_signal", False)
                 )
+                # Smart-defer держим только в узкой зоне около breakeven:
+                # - сверху: net ≤ smart_defer_net_le (обычно небольшой плюс)
+                # - снизу: net ≥ -hold_skip_neg (обычно небольшой минус от комиссий/шума)
+                smart_defer_min_net_ge = (-hold_skip_neg) if hold_skip_neg > 0.0 else 0.0
                 if (
                     smart_sig_age > 0
                     and (stale_cap <= 0.0 or age < stale_cap)
                     and (smart_defer_net_le <= 0.0 or pnl_net_bps <= smart_defer_net_le + 1e-9)
+                    and pnl_net_bps + 1e-9 >= smart_defer_min_net_ge
                 ):
                     last = self._last_sig.get((exchange_id, sym))
                     pos_side = "buy" if pos > 0 else "sell"
