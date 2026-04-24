@@ -627,6 +627,9 @@ class ScalpAutoTrader:
                 smart_defer_net_le = float(
                     getattr(self._s, "auto_trade_max_hold_smart_defer_if_pnl_net_le_bps", 0.0) or 0.0
                 )
+                smart_defer_neg_net_ge = float(
+                    getattr(self._s, "auto_trade_max_hold_smart_defer_neg_net_ge_bps", 0.0) or 0.0
+                )
                 smart_allow_no_sig = bool(
                     getattr(self._s, "auto_trade_max_hold_smart_allow_without_signal", False)
                 )
@@ -700,6 +703,78 @@ class ScalpAutoTrader:
                                     self._ana_inc("exit_max_hold_defer_signal", exchange_id, sym)
                                 else:
                                     self._ana_inc("exit_max_hold_defer_nosignal", exchange_id, sym)
+                            return
+
+                # Smart MAX_HOLD: расширение на умеренный минус (net), чтобы меньше фиксировать убыток по таймеру.
+                # Условия:
+                # - включено smart_defer_neg_net_ge (<0)
+                # - pnl_net в диапазоне [smart_defer_neg_net_ge .. -hold_skip_neg) или ниже 0 если hold_skip_neg=0
+                # - не пересекли force_exit порог
+                # - рынок/стакан нормальные, сигнал не против позиции (или разрешён no-signal fallback)
+                if (
+                    smart_defer_neg_net_ge < -1e-9
+                    and pnl_net_bps + 1e-9 < smart_defer_min_net_ge
+                    and pnl_net_bps + 1e-9 >= smart_defer_neg_net_ge
+                    and (smart_force_exit_net_le == 0.0 or pnl_net_bps > smart_force_exit_net_le + 1e-9)
+                    and smart_sig_age > 0
+                    and (stale_cap <= 0.0 or age < stale_cap)
+                ):
+                    last = self._last_sig.get((exchange_id, sym))
+                    pos_side = "buy" if pos > 0 else "sell"
+                    last_age = (now_mono - float(last[0])) if last is not None else float("inf")
+                    has_fresh_sig = last is not None and last_age <= smart_sig_age + 1e-9
+                    sig_supports = has_fresh_sig and last[1] == pos_side
+                    sig_opposes = has_fresh_sig and last[1] != pos_side
+                    allow_defer = (
+                        (sig_supports or (smart_allow_no_sig and not has_fresh_sig))
+                        and not sig_opposes
+                    )
+                    if allow_defer:
+                        sp_bps = spread_bps(best_bid, best_ask)
+                        wide_spread = False
+                        if atr_bps is not None and atr_bps > 1e-9 and mid_stop_spread_atr_m > 0:
+                            wide_spread = sp_bps > float(atr_bps) * mid_stop_spread_atr_m + 1e-9
+
+                        thin_book = False
+                        max_slip = float(self._s.scalping_max_slippage_bps)
+                        amt = abs(float(pos))
+                        if amt > 1e-12:
+                            if pos > 0:
+                                _q, vwap, _sold, complete = vwap_sell_base(bids, amt)
+                                if not complete:
+                                    thin_book = True
+                                else:
+                                    slip = simulated_slippage_bps_sell(best_bid, float(vwap), mid)
+                                    thin_book = slip > max_slip + 1e-9
+                            else:
+                                _q, vwap, _bought, complete = vwap_buy_base(asks, amt)
+                                if not complete:
+                                    thin_book = True
+                                else:
+                                    slip = simulated_slippage_bps_buy(best_ask, float(vwap), mid)
+                                    thin_book = slip > max_slip + 1e-9
+
+                        if not wide_spread and not thin_book:
+                            if self._exit_skip_log_ok(sym, now_mono):
+                                side_tag = "long" if pos > 0 else "short"
+                                sig_tag = (
+                                    pos_side
+                                    if sig_supports
+                                    else ("no_signal" if (smart_allow_no_sig and not has_fresh_sig) else "stale")
+                                )
+                                self._log.info(
+                                    "auto_trade: exit %s — smart MAX_HOLD defer_neg (%s): сигнал=%s age_sig≈%.0fs, "
+                                    "pnl_net≈%.1fbps (raw≈%.1f fee≈%.1f) spread≈%.2fbps; ждём улучшения/инвалидации",
+                                    sym,
+                                    side_tag,
+                                    sig_tag,
+                                    (last_age if last is not None else float("inf")),
+                                    pnl_net_bps,
+                                    pnl_bps,
+                                    fee_side_bps,
+                                    sp_bps,
+                                )
+                            self._ana_inc("exit_max_hold_defer_neg", exchange_id, sym)
                             return
                 if (
                     hold_min_pnl > 0
