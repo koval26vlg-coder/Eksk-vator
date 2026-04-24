@@ -624,15 +624,29 @@ class ScalpAutoTrader:
                 smart_force_exit_net_le = float(
                     getattr(self._s, "auto_trade_max_hold_smart_force_exit_if_pnl_net_le_bps", 0.0) or 0.0
                 )
-                if smart_sig_age > 0 and (stale_cap <= 0.0 or age < stale_cap):
+                smart_defer_net_le = float(
+                    getattr(self._s, "auto_trade_max_hold_smart_defer_if_pnl_net_le_bps", 0.0) or 0.0
+                )
+                smart_allow_no_sig = bool(
+                    getattr(self._s, "auto_trade_max_hold_smart_allow_without_signal", False)
+                )
+                if (
+                    smart_sig_age > 0
+                    and (stale_cap <= 0.0 or age < stale_cap)
+                    and (smart_defer_net_le <= 0.0 or pnl_net_bps <= smart_defer_net_le + 1e-9)
+                ):
                     last = self._last_sig.get((exchange_id, sym))
                     pos_side = "buy" if pos > 0 else "sell"
-                    if (
-                        last is not None
-                        and last[1] == pos_side
-                        and (now_mono - float(last[0])) <= smart_sig_age + 1e-9
+                    last_age = (now_mono - float(last[0])) if last is not None else float("inf")
+                    has_fresh_sig = last is not None and last_age <= smart_sig_age + 1e-9
+                    sig_supports = has_fresh_sig and last[1] == pos_side
+                    sig_opposes = has_fresh_sig and last[1] != pos_side
+                    allow_defer = (
+                        (sig_supports or (smart_allow_no_sig and not has_fresh_sig))
+                        and not sig_opposes
                         and (smart_force_exit_net_le == 0.0 or pnl_net_bps > smart_force_exit_net_le + 1e-9)
-                    ):
+                    )
+                    if allow_defer:
                         sp_bps = spread_bps(best_bid, best_ask)
                         wide_spread = False
                         if atr_bps is not None and atr_bps > 1e-9 and mid_stop_spread_atr_m > 0:
@@ -660,19 +674,27 @@ class ScalpAutoTrader:
                         if not wide_spread and not thin_book:
                             if self._exit_skip_log_ok(sym, now_mono):
                                 side_tag = "long" if pos > 0 else "short"
+                                sig_tag = (
+                                    pos_side
+                                    if sig_supports
+                                    else ("no_signal" if (smart_allow_no_sig and not has_fresh_sig) else "stale")
+                                )
                                 self._log.info(
                                     "auto_trade: exit %s — smart MAX_HOLD defer (%s): свежий сигнал=%s age_sig≈%.0fs, "
                                     "pnl_net≈%.1fbps (raw≈%.1f fee≈%.1f) spread≈%.2fbps; ждём улучшения/инвалидации",
                                     sym,
                                     side_tag,
-                                    pos_side,
-                                    now_mono - float(last[0]),
+                                    sig_tag,
+                                    (last_age if last is not None else float("inf")),
                                     pnl_net_bps,
                                     pnl_bps,
                                     fee_side_bps,
                                     sp_bps,
                                 )
-                                self._ana_inc("exit_max_hold_defer_signal", exchange_id, sym)
+                                if sig_supports:
+                                    self._ana_inc("exit_max_hold_defer_signal", exchange_id, sym)
+                                else:
+                                    self._ana_inc("exit_max_hold_defer_nosignal", exchange_id, sym)
                             return
                 if (
                     hold_min_pnl > 0

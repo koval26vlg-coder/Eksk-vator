@@ -136,6 +136,12 @@ class Settings:
     #: Smart MAX_HOLD: закрывать по таймеру даже при свежем сигнале, если net‑PnL (bps) ≤ порога (обычно отрицательный).
     #: 0 = выкл.
     auto_trade_max_hold_smart_force_exit_if_pnl_net_le_bps: float
+    #: Smart MAX_HOLD: применять defer только если net‑PnL (bps) ≤ порога (обычно небольшой плюс/около 0).
+    #: 0 = выключить ограничение.
+    auto_trade_max_hold_smart_defer_if_pnl_net_le_bps: float
+    #: Smart MAX_HOLD: разрешить defer даже без свежего TA-сигнала (например, если OHLCV временно не доступен),
+    #: если рынок "нормальный" и net не хуже force_exit порога. Default: false.
+    auto_trade_max_hold_smart_allow_without_signal: bool
     #: Авто-выход (paper): разрешить TP даже если есть pending-ордера по symbol (обычно лучше false).
     auto_trade_tp_allow_with_pending: bool
     #: AUTO_TUNE: авто‑подстройка входов под комиссии/TP (в основном — «тихий рынок»).
@@ -355,6 +361,13 @@ def load_settings() -> Settings:
     at_hold_book_tp_stale = float(_raw_hold_book_stale) if _raw_hold_book_stale else 0.0
     at_hold_smart_sig_age = float(os.getenv("AUTO_TRADE_MAX_HOLD_SMART_SIGNAL_MAX_AGE_SECONDS", "0"))
     at_hold_smart_force_net_le = float(os.getenv("AUTO_TRADE_MAX_HOLD_SMART_FORCE_EXIT_IF_PNL_NET_LE_BPS", "0"))
+    at_hold_smart_defer_net_le = float(os.getenv("AUTO_TRADE_MAX_HOLD_SMART_DEFER_IF_PNL_NET_LE_BPS", "0"))
+    at_hold_smart_allow_no_sig = os.getenv("AUTO_TRADE_MAX_HOLD_SMART_ALLOW_WITHOUT_SIGNAL", "false").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
     at_sl_atr_mult = float(os.getenv("AUTO_TRADE_SL_ATR_MULT", "0"))
     at_early_stop_s = float(os.getenv("AUTO_TRADE_EARLY_STOP_SECONDS", "0"))
     at_early_stop_loss = float(os.getenv("AUTO_TRADE_EARLY_STOP_MAX_LOSS_NET_BPS", "0"))
@@ -563,10 +576,16 @@ def load_settings() -> Settings:
         at_hold_hard = max(at_hold_hard, 7200.0)
         # Smart MAX_HOLD: если сигнал в сторону позиции свежий — не фиксируем минус по таймеру без необходимости.
         at_hold_smart_sig_age = max(at_hold_smart_sig_age, 300.0)
+        # Smart MAX_HOLD: не деферим "уже хороший плюс" — эту зону пусть забирает TP.
+        # Включаем defer в основном около breakeven (или небольшой плюс).
+        at_hold_smart_defer_net_le = max(at_hold_smart_defer_net_le, 6.0)
         # Если net уходит слишком глубоко в минус — закрываем по таймеру даже при свежем сигнале.
         # (в логах было много MAX_HOLD выходов в -15…-25 bps; ставим мягкий порог).
         if at_hold_smart_force_net_le >= -1e-9:
-            at_hold_smart_force_net_le = -12.0
+            at_hold_smart_force_net_le = -25.0
+        # Если TA/OHLCV временно не даёт сигналов — всё равно можно "умно" не закрывать по таймеру,
+        # но только когда рынок нормальный и net не хуже force_exit порога.
+        at_hold_smart_allow_no_sig = True
         # Ранний invalidation: режем только "плохие" входы, но не шум/комиссии.
         # Важно: не делать его слишком чувствительным, иначе получаем churn и минус по fee.
         at_early_stop_s = 180.0
@@ -958,6 +977,8 @@ def load_settings() -> Settings:
         auto_trade_max_hold_book_tp_stale_seconds=at_hold_book_tp_stale,
         auto_trade_max_hold_smart_signal_max_age_seconds=at_hold_smart_sig_age,
         auto_trade_max_hold_smart_force_exit_if_pnl_net_le_bps=at_hold_smart_force_net_le,
+        auto_trade_max_hold_smart_defer_if_pnl_net_le_bps=at_hold_smart_defer_net_le,
+        auto_trade_max_hold_smart_allow_without_signal=at_hold_smart_allow_no_sig,
         auto_trade_tp_allow_with_pending=at_tp_allow_pending,
         auto_trade_auto_tune=auto_tune,
         auto_trade_auto_tune_min_mid_range_bps=auto_tune_min_rng,
