@@ -158,6 +158,10 @@ class ScalpAutoTrader:
         self._mid_window: dict[tuple[str, str], deque[tuple[float, float]]] = {}
         # Последний mid по ноге для отчёта unrealized в конце сессии (обновляется при любом стакане/тике).
         self._last_mid: dict[tuple[str, str], float] = {}
+        # Smart MAX_HOLD: последний TA-сигнал по ноге (биржа+символ), чтобы не закрывать позицию "в минус" по таймеру,
+        # если сигнал всё ещё в сторону позиции.
+        # key=(exchange_id, symbol) -> (mono_ts, side, impulse_bps)
+        self._last_sig: dict[tuple[str, str], tuple[float, str, float | None]] = {}
         # Чтобы не спамить "quiet guard" на каждом сигнале.
         self._quiet_skip_log_mono: dict[tuple[str, str], float] = {}
         # Троттлинг для прочих «входных» guard-логов (single-open и т.п.).
@@ -612,6 +616,64 @@ class ScalpAutoTrader:
                 # Общий потолок по возрасту для любых "деферов" MAX_HOLD (чтобы позиция не висела бесконечно).
                 stale_cap = float(getattr(self._s, "auto_trade_max_hold_book_tp_stale_seconds", 0.0) or 0.0)
                 hold_skip_neg = float(getattr(self._s, "auto_trade_max_hold_skip_if_pnl_net_ge_neg_bps", 0.0) or 0.0)
+                # Smart MAX_HOLD: если последний TA-сигнал свежий и в сторону позиции — не закрываем по таймеру,
+                # пока net не ухудшился ниже порога, и пока рынок для удержания "нормальный" (не широкий спред/не тонкий стакан).
+                smart_sig_age = float(
+                    getattr(self._s, "auto_trade_max_hold_smart_signal_max_age_seconds", 0.0) or 0.0
+                )
+                smart_force_exit_net_le = float(
+                    getattr(self._s, "auto_trade_max_hold_smart_force_exit_if_pnl_net_le_bps", 0.0) or 0.0
+                )
+                if smart_sig_age > 0 and (stale_cap <= 0.0 or age < stale_cap):
+                    last = self._last_sig.get((exchange_id, sym))
+                    pos_side = "buy" if pos > 0 else "sell"
+                    if (
+                        last is not None
+                        and last[1] == pos_side
+                        and (now_mono - float(last[0])) <= smart_sig_age + 1e-9
+                        and (smart_force_exit_net_le == 0.0 or pnl_net_bps > smart_force_exit_net_le + 1e-9)
+                    ):
+                        sp_bps = spread_bps(best_bid, best_ask)
+                        wide_spread = False
+                        if atr_bps is not None and atr_bps > 1e-9 and mid_stop_spread_atr_m > 0:
+                            wide_spread = sp_bps > float(atr_bps) * mid_stop_spread_atr_m + 1e-9
+
+                        thin_book = False
+                        max_slip = float(self._s.scalping_max_slippage_bps)
+                        amt = abs(float(pos))
+                        if amt > 1e-12:
+                            if pos > 0:
+                                _q, vwap, _sold, complete = vwap_sell_base(bids, amt)
+                                if not complete:
+                                    thin_book = True
+                                else:
+                                    slip = simulated_slippage_bps_sell(best_bid, float(vwap), mid)
+                                    thin_book = slip > max_slip + 1e-9
+                            else:
+                                _q, vwap, _bought, complete = vwap_buy_base(asks, amt)
+                                if not complete:
+                                    thin_book = True
+                                else:
+                                    slip = simulated_slippage_bps_buy(best_ask, float(vwap), mid)
+                                    thin_book = slip > max_slip + 1e-9
+
+                        if not wide_spread and not thin_book:
+                            if self._exit_skip_log_ok(sym, now_mono):
+                                side_tag = "long" if pos > 0 else "short"
+                                self._log.info(
+                                    "auto_trade: exit %s — smart MAX_HOLD defer (%s): свежий сигнал=%s age_sig≈%.0fs, "
+                                    "pnl_net≈%.1fbps (raw≈%.1f fee≈%.1f) spread≈%.2fbps; ждём улучшения/инвалидации",
+                                    sym,
+                                    side_tag,
+                                    pos_side,
+                                    now_mono - float(last[0]),
+                                    pnl_net_bps,
+                                    pnl_bps,
+                                    fee_side_bps,
+                                    sp_bps,
+                                )
+                                self._ana_inc("exit_max_hold_defer_signal", exchange_id, sym)
+                            return
                 if (
                     hold_min_pnl > 0
                     and pnl_net_bps + 1e-9 < hold_min_pnl
@@ -1337,6 +1399,11 @@ class ScalpAutoTrader:
         sig: ScalpSignal,
         order_book: dict | None = None,
     ) -> None:
+        now_mono = time.monotonic()
+        # Smart MAX_HOLD: запоминаем "последний сигнал" даже если вход будет заблокирован кулдауном/guards —
+        # это даёт выходу (MAX_HOLD) контекст направления.
+        self._last_sig[(exchange_id, q.symbol)] = (now_mono, sig.side, getattr(sig, "impulse_bps", None))
+
         if self._sigma_spike_blocks(exchange_id, q.symbol):
             self._ana_inc("sigma_spike_cooldown", exchange_id, q.symbol)
             self._log.debug("auto_trade: пауза после всплеска σ %s %s", exchange_id, q.symbol)
@@ -1347,7 +1414,6 @@ class ScalpAutoTrader:
             return
 
         # Anti-churn: после выхода по символу не заходим повторно в ту же сторону.
-        now_mono = time.monotonic()
         if not self._reentry_ok(exchange_id, q.symbol, sig.side, now_mono):
             self._ana_inc("reentry_cooldown", exchange_id, q.symbol)
             self._log.debug("auto_trade: reentry_cooldown %s %s %s", exchange_id, q.symbol, sig.side)

@@ -130,6 +130,12 @@ class Settings:
     auto_trade_max_hold_book_tp_gate: bool
     #: Paper: при включённом gate — не откладывать дольше этого возраста позиции (сек); 0 = без потолка (риск «вечного» ожидания).
     auto_trade_max_hold_book_tp_stale_seconds: float
+    #: Smart MAX_HOLD: если последний TA-сигнал в сторону позиции свежий — не закрывать по таймеру, пока net не ухудшился ниже порога.
+    #: 0 = выкл.
+    auto_trade_max_hold_smart_signal_max_age_seconds: float
+    #: Smart MAX_HOLD: закрывать по таймеру даже при свежем сигнале, если net‑PnL (bps) ≤ порога (обычно отрицательный).
+    #: 0 = выкл.
+    auto_trade_max_hold_smart_force_exit_if_pnl_net_le_bps: float
     #: Авто-выход (paper): разрешить TP даже если есть pending-ордера по symbol (обычно лучше false).
     auto_trade_tp_allow_with_pending: bool
     #: AUTO_TUNE: авто‑подстройка входов под комиссии/TP (в основном — «тихий рынок»).
@@ -347,6 +353,8 @@ def load_settings() -> Settings:
     )
     _raw_hold_book_stale = os.getenv("AUTO_TRADE_MAX_HOLD_BOOK_TP_STALE_SECONDS", "0").strip()
     at_hold_book_tp_stale = float(_raw_hold_book_stale) if _raw_hold_book_stale else 0.0
+    at_hold_smart_sig_age = float(os.getenv("AUTO_TRADE_MAX_HOLD_SMART_SIGNAL_MAX_AGE_SECONDS", "0"))
+    at_hold_smart_force_net_le = float(os.getenv("AUTO_TRADE_MAX_HOLD_SMART_FORCE_EXIT_IF_PNL_NET_LE_BPS", "0"))
     at_sl_atr_mult = float(os.getenv("AUTO_TRADE_SL_ATR_MULT", "0"))
     at_early_stop_s = float(os.getenv("AUTO_TRADE_EARLY_STOP_SECONDS", "0"))
     at_early_stop_loss = float(os.getenv("AUTO_TRADE_EARLY_STOP_MAX_LOSS_NET_BPS", "0"))
@@ -553,6 +561,12 @@ def load_settings() -> Settings:
         at_hold_skip_neg = 4.0
         # Жёсткий потолок (аварийный): закрыть позицию, если она живёт слишком долго.
         at_hold_hard = max(at_hold_hard, 7200.0)
+        # Smart MAX_HOLD: если сигнал в сторону позиции свежий — не фиксируем минус по таймеру без необходимости.
+        at_hold_smart_sig_age = max(at_hold_smart_sig_age, 300.0)
+        # Если net уходит слишком глубоко в минус — закрываем по таймеру даже при свежем сигнале.
+        # (в логах было много MAX_HOLD выходов в -15…-25 bps; ставим мягкий порог).
+        if at_hold_smart_force_net_le >= -1e-9:
+            at_hold_smart_force_net_le = -12.0
         # Ранний invalidation: режем только "плохие" входы, но не шум/комиссии.
         # Важно: не делать его слишком чувствительным, иначе получаем churn и минус по fee.
         at_early_stop_s = 180.0
@@ -942,6 +956,8 @@ def load_settings() -> Settings:
         auto_trade_max_hold_hard_seconds=at_hold_hard,
         auto_trade_max_hold_book_tp_gate=at_hold_book_tp_gate,
         auto_trade_max_hold_book_tp_stale_seconds=at_hold_book_tp_stale,
+        auto_trade_max_hold_smart_signal_max_age_seconds=at_hold_smart_sig_age,
+        auto_trade_max_hold_smart_force_exit_if_pnl_net_le_bps=at_hold_smart_force_net_le,
         auto_trade_tp_allow_with_pending=at_tp_allow_pending,
         auto_trade_auto_tune=auto_tune,
         auto_trade_auto_tune_min_mid_range_bps=auto_tune_min_rng,
