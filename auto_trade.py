@@ -146,6 +146,8 @@ class ScalpAutoTrader:
         self._sigma_spike_until_mono: dict[tuple[str, str], float] = {}
         #: При AUTO_TRADE_COOLDOWN_SCOPE=symbol — сериализация on_signal по паре (два WS не гонятся за одним кулдауном).
         self._symbol_scope_locks: dict[str, asyncio.Lock] = {}
+        #: Блокировки для защиты от race conditions на (exchange_id, symbol) scope.
+        self._leg_locks: dict[tuple[str, str], asyncio.Lock] = {}
         # Авто-выход: когда позиция по ноге (биржа+символ) считается «открытой» (для max-hold).
         # Ключ: "{exchange_id}:{symbol}".
         self._pos_open_mono: dict[str, float] = {}
@@ -353,6 +355,13 @@ class ScalpAutoTrader:
             return False
         return abs(pos_base) * float(mid) < thr
 
+    def _get_leg_lock(self, exchange_id: str, symbol: str) -> asyncio.Lock:
+        """Получить блокировку для защиты от race conditions на (exchange_id, symbol) scope."""
+        key = (str(exchange_id), str(symbol))
+        if key not in self._leg_locks:
+            self._leg_locks[key] = asyncio.Lock()
+        return self._leg_locks[key]
+
     def _book_full_exit_net_ge_tp(
         self,
         pos: float,
@@ -443,6 +452,133 @@ class ScalpAutoTrader:
             or float(self._s.auto_trade_max_hold_seconds) > 0.0
         )
 
+    def _check_take_profit(self, pnl_net_bps: float, pnl_bps: float, fee_side_bps: float) -> str | None:
+        """Проверка Take Profit. Возвращает reason если условие сработало."""
+        tp = float(self._s.auto_trade_tp_bps)
+        if tp > 0 and pnl_net_bps >= tp:
+            return f"TP net {pnl_net_bps:.1f}≥{tp:.1f} bps (raw≈{pnl_bps:.1f} fee≈{fee_side_bps:.1f})"
+        return None
+
+    def _check_stop_loss(
+        self,
+        pnl_bps: float,
+        atr_bps: float | None,
+        exchange_id: str,
+        symbol: str,
+    ) -> str | None:
+        """Проверка Stop Loss (с учётом ATR multiplier). Возвращает reason если условие сработало."""
+        sl = float(self._s.auto_trade_sl_bps)
+        sl_atr_mult = float(getattr(self._s, "auto_trade_sl_atr_mult", 0.0) or 0.0)
+
+        if atr_bps is not None and atr_bps > 0 and sl_atr_mult > 0:
+            sl_eff = max(sl, sl_atr_mult * float(atr_bps))
+        else:
+            sl_eff = sl
+
+        if sl_eff > 0 and pnl_bps <= -sl_eff:
+            if atr_bps is not None and atr_bps > 0 and sl_atr_mult > 0:
+                return (
+                    f"SL {pnl_bps:.1f}≤-{sl_eff:.1f} bps "
+                    f"(sl_bps={sl:.1f} atr≈{float(atr_bps):.1f}×{sl_atr_mult:.2f})"
+                )
+            else:
+                return f"SL {pnl_bps:.1f}≤-{sl_eff:.1f} bps"
+        return None
+
+    def _check_early_stop(
+        self,
+        age: float,
+        pnl_bps: float,
+        pnl_net_bps: float,
+        fee_side_bps: float,
+    ) -> str | None:
+        """Проверка Early Stop (быстрый выход при убытке в начале). Возвращает reason если условие сработало."""
+        early_stop_s = float(getattr(self._s, "auto_trade_early_stop_seconds", 0.0) or 0.0)
+        early_stop_loss = float(getattr(self._s, "auto_trade_early_stop_max_loss_net_bps", 0.0) or 0.0)
+        early_stop_loss_raw = float(getattr(self._s, "auto_trade_early_stop_max_loss_raw_bps", 0.0) or 0.0)
+        early_stop_min_age = float(getattr(self._s, "auto_trade_early_stop_min_age_seconds", 0.0) or 0.0)
+
+        if (
+            early_stop_s > 0
+            and age + 1e-9 >= early_stop_min_age
+            and age <= early_stop_s
+            and (
+                (early_stop_loss_raw > 0 and pnl_bps <= -early_stop_loss_raw)
+                or (early_stop_loss_raw <= 0 and early_stop_loss > 0 and pnl_net_bps <= -early_stop_loss)
+            )
+        ):
+            if early_stop_loss_raw > 0:
+                return (
+                    f"EARLY_STOP raw {pnl_bps:.1f}≤-{early_stop_loss_raw:.1f} bps in {age:.0f}s≤{early_stop_s:.0f}s "
+                    f"(net≈{pnl_net_bps:.1f} fee≈{fee_side_bps:.1f})"
+                )
+            else:
+                return (
+                    f"EARLY_STOP net {pnl_net_bps:.1f}≤-{early_stop_loss:.1f} bps in {age:.0f}s≤{early_stop_s:.0f}s "
+                    f"(raw≈{pnl_bps:.1f} fee≈{fee_side_bps:.1f})"
+                )
+        return None
+
+    def _check_mid_stop(
+        self,
+        age: float,
+        pnl_bps: float,
+        pos: float,
+        best_bid: float,
+        best_ask: float,
+        bids: list,
+        asks: list,
+        mid: float,
+        atr_bps: float | None,
+        exchange_id: str,
+        symbol: str,
+    ) -> str | None:
+        """Проверка Mid Stop (выход при убытке в середине удержания + плохие условия). Возвращает reason если условие сработало."""
+        mid_stop_start = float(getattr(self._s, "auto_trade_mid_stop_start_seconds", 0.0) or 0.0)
+        mid_stop_loss_raw = float(getattr(self._s, "auto_trade_mid_stop_max_loss_raw_bps", 0.0) or 0.0)
+        mid_stop_thin = bool(getattr(self._s, "auto_trade_mid_stop_require_thin_book", True))
+        mid_stop_spread_atr_m = float(getattr(self._s, "auto_trade_mid_stop_wide_spread_atr_mult", 0.0) or 0.0)
+
+        if not (mid_stop_start > 0 and mid_stop_loss_raw > 0 and age >= mid_stop_start and pnl_bps <= -mid_stop_loss_raw):
+            return None
+
+        sp_bps = spread_bps(best_bid, best_ask)
+        wide_spread = False
+        if atr_bps is not None and atr_bps > 1e-9 and mid_stop_spread_atr_m > 0:
+            wide_spread = sp_bps > float(atr_bps) * mid_stop_spread_atr_m + 1e-9
+
+        thin_book = False
+        if mid_stop_thin:
+            max_slip = float(self._s.scalping_max_slippage_bps)
+            amt = abs(float(pos))
+            if pos > 0:
+                _q, vwap, _sold, complete = vwap_sell_base(bids, amt)
+                if not complete:
+                    thin_book = True
+                else:
+                    slip = simulated_slippage_bps_sell(best_bid, float(vwap), mid)
+                    thin_book = slip > max_slip + 1e-9
+            else:
+                _q, vwap, _bought, complete = vwap_buy_base(asks, amt)
+                if not complete:
+                    thin_book = True
+                else:
+                    slip = simulated_slippage_bps_buy(best_ask, float(vwap), mid)
+                    thin_book = slip > max_slip + 1e-9
+
+        if wide_spread or thin_book:
+            self._ana_inc("mid_stop", exchange_id, symbol)
+            why = []
+            if wide_spread:
+                if atr_bps is not None and atr_bps > 0 and mid_stop_spread_atr_m > 0:
+                    why.append(f"spread {sp_bps:.2f}bps>ATR×{mid_stop_spread_atr_m:.2f} (ATR≈{float(atr_bps):.1f})")
+                else:
+                    why.append(f"spread {sp_bps:.2f}bps wide")
+            if thin_book:
+                why.append("thin_book")
+            return f"MID_STOP raw {pnl_bps:.1f}≤-{mid_stop_loss_raw:.1f} bps age={age:.0f}s (" + ", ".join(why) + ")"
+        return None
+
     async def _maybe_exit_position_paper(
         self,
         exchange_id: str,
@@ -514,102 +650,31 @@ class ScalpAutoTrader:
         fee_side_bps = float(self._s.paper_trading_fee_bps())
         pnl_net_bps = pnl_bps - fee_side_bps
 
-        tp = float(self._s.auto_trade_tp_bps)
-        sl = float(self._s.auto_trade_sl_bps)
-        sl_atr_mult = float(getattr(self._s, "auto_trade_sl_atr_mult", 0.0) or 0.0)
-        hold = float(self._s.auto_trade_max_hold_seconds)
         if pos > 0:
             hold_min_pnl = float(self._s.auto_trade_max_hold_min_pnl_bps_long)
         else:
             hold_min_pnl = float(self._s.auto_trade_max_hold_min_pnl_bps_short)
-        hold_hard = float(getattr(self._s, "auto_trade_max_hold_hard_seconds", 0.0) or 0.0)
 
         atr_bps = self._atr_bps_provider(exchange_id, sym) if self._atr_bps_provider else None
-        if atr_bps is not None and atr_bps > 0 and sl_atr_mult > 0:
-            sl_eff = max(sl, sl_atr_mult * float(atr_bps))
-        else:
-            sl_eff = sl
-
         opened = float(self._pos_open_mono.get(leg_key, now_mono))
         age = now_mono - opened
-        early_stop_s = float(getattr(self._s, "auto_trade_early_stop_seconds", 0.0) or 0.0)
-        early_stop_loss = float(getattr(self._s, "auto_trade_early_stop_max_loss_net_bps", 0.0) or 0.0)
-        early_stop_loss_raw = float(getattr(self._s, "auto_trade_early_stop_max_loss_raw_bps", 0.0) or 0.0)
-        early_stop_min_age = float(getattr(self._s, "auto_trade_early_stop_min_age_seconds", 0.0) or 0.0)
-        mid_stop_start = float(getattr(self._s, "auto_trade_mid_stop_start_seconds", 0.0) or 0.0)
-        mid_stop_loss_raw = float(getattr(self._s, "auto_trade_mid_stop_max_loss_raw_bps", 0.0) or 0.0)
-        mid_stop_thin = bool(getattr(self._s, "auto_trade_mid_stop_require_thin_book", True))
-        mid_stop_spread_atr_m = float(getattr(self._s, "auto_trade_mid_stop_wide_spread_atr_mult", 0.0) or 0.0)
+        hold = float(self._s.auto_trade_max_hold_seconds)
+        hold_hard = float(getattr(self._s, "auto_trade_max_hold_hard_seconds", 0.0) or 0.0)
 
+        # Проверяем условия выхода в порядке приоритета
         reason: str | None = None
-        if tp > 0 and pnl_net_bps >= tp:
-            reason = f"TP net {pnl_net_bps:.1f}≥{tp:.1f} bps (raw≈{pnl_bps:.1f} fee≈{fee_side_bps:.1f})"
-        elif sl_eff > 0 and pnl_bps <= -sl_eff:
-            if atr_bps is not None and atr_bps > 0 and sl_atr_mult > 0:
-                reason = (
-                    f"SL {pnl_bps:.1f}≤-{sl_eff:.1f} bps "
-                    f"(sl_bps={sl:.1f} atr≈{float(atr_bps):.1f}×{sl_atr_mult:.2f})"
-                )
-            else:
-                reason = f"SL {pnl_bps:.1f}≤-{sl_eff:.1f} bps"
-        elif (
-            early_stop_s > 0
-            and age + 1e-9 >= early_stop_min_age
-            and age <= early_stop_s
-            and (
-                (early_stop_loss_raw > 0 and pnl_bps <= -early_stop_loss_raw)
-                or (early_stop_loss_raw <= 0 and early_stop_loss > 0 and pnl_net_bps <= -early_stop_loss)
+        reason = self._check_take_profit(pnl_net_bps, pnl_bps, fee_side_bps)
+        if reason is None:
+            reason = self._check_stop_loss(pnl_bps, atr_bps, exchange_id, sym)
+        if reason is None:
+            reason = self._check_early_stop(age, pnl_bps, pnl_net_bps, fee_side_bps)
+        if reason is None:
+            reason = self._check_mid_stop(
+                age, pnl_bps, pos, best_bid, best_ask, bids, asks, mid, atr_bps, exchange_id, sym
             )
-        ):
-            if early_stop_loss_raw > 0:
-                reason = (
-                    f"EARLY_STOP raw {pnl_bps:.1f}≤-{early_stop_loss_raw:.1f} bps in {age:.0f}s≤{early_stop_s:.0f}s "
-                    f"(net≈{pnl_net_bps:.1f} fee≈{fee_side_bps:.1f})"
-                )
-            else:
-                reason = (
-                    f"EARLY_STOP net {pnl_net_bps:.1f}≤-{early_stop_loss:.1f} bps in {age:.0f}s≤{early_stop_s:.0f}s "
-                    f"(raw≈{pnl_bps:.1f} fee≈{fee_side_bps:.1f})"
-                )
-        elif mid_stop_start > 0 and mid_stop_loss_raw > 0 and age >= mid_stop_start and pnl_bps <= -mid_stop_loss_raw:
-            # Mid-phase invalidation: позиция уже "созрела" (не первые секунды),
-            # и при этом убыточна заметно; закрываем только если выход объективно ухудшился.
-            sp_bps = spread_bps(best_bid, best_ask)
-            wide_spread = False
-            if atr_bps is not None and atr_bps > 1e-9 and mid_stop_spread_atr_m > 0:
-                wide_spread = sp_bps > float(atr_bps) * mid_stop_spread_atr_m + 1e-9
 
-            thin_book = False
-            if mid_stop_thin:
-                max_slip = float(self._s.scalping_max_slippage_bps)
-                amt = abs(float(pos))
-                if pos > 0:
-                    _q, vwap, _sold, complete = vwap_sell_base(bids, amt)
-                    if not complete:
-                        thin_book = True
-                    else:
-                        slip = simulated_slippage_bps_sell(best_bid, float(vwap), mid)
-                        thin_book = slip > max_slip + 1e-9
-                else:
-                    _q, vwap, _bought, complete = vwap_buy_base(asks, amt)
-                    if not complete:
-                        thin_book = True
-                    else:
-                        slip = simulated_slippage_bps_buy(best_ask, float(vwap), mid)
-                        thin_book = slip > max_slip + 1e-9
-
-            if wide_spread or thin_book:
-                self._ana_inc("mid_stop", exchange_id, sym)
-                why = []
-                if wide_spread:
-                    if atr_bps is not None and atr_bps > 0 and mid_stop_spread_atr_m > 0:
-                        why.append(f"spread {sp_bps:.2f}bps>ATR×{mid_stop_spread_atr_m:.2f} (ATR≈{float(atr_bps):.1f})")
-                    else:
-                        why.append(f"spread {sp_bps:.2f}bps wide")
-                if thin_book:
-                    why.append("thin_book")
-                reason = f"MID_STOP raw {pnl_bps:.1f}≤-{mid_stop_loss_raw:.1f} bps age={age:.0f}s (" + ", ".join(why) + ")"
-        else:
+        # MAX_HOLD логика (если предыдущие проверки не сработали)
+        if reason is None:
             if hold_hard > 0 and age >= hold_hard:
                 reason = f"MAX_HOLD_HARD {age:.0f}s≥{hold_hard:.0f}s"
             elif hold > 0 and age >= hold:
@@ -1216,6 +1281,12 @@ class ScalpAutoTrader:
         if not self._s.auto_trade:
             return
 
+        # Защита от race conditions: блокировка на (exchange_id, symbol) scope
+        async with self._get_leg_lock(exchange_id, symbol):
+            await self._on_tick_impl(exchange_id, symbol, order_book)
+
+    async def _on_tick_impl(self, exchange_id: str, symbol: str, order_book: dict | None) -> None:
+        """Реализация on_tick под блокировкой."""
         if self._s.paper:
             if not order_book:
                 return
@@ -1490,9 +1561,13 @@ class ScalpAutoTrader:
         if self._s.auto_trade_cooldown_scope == "symbol":
             lk = self._symbol_scope_locks.setdefault(q.symbol, asyncio.Lock())
             async with lk:
-                await self._on_signal_impl(exchange_id, q, sig, order_book)
+                # Дополнительная блокировка на leg level для защиты от race conditions
+                async with self._get_leg_lock(exchange_id, q.symbol):
+                    await self._on_signal_impl(exchange_id, q, sig, order_book)
             return
-        await self._on_signal_impl(exchange_id, q, sig, order_book)
+        # Блокировка на leg level для защиты от race conditions
+        async with self._get_leg_lock(exchange_id, q.symbol):
+            await self._on_signal_impl(exchange_id, q, sig, order_book)
 
     async def _on_signal_impl(
         self,
