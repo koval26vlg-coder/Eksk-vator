@@ -528,7 +528,11 @@ class OrderExecutor:
                     log.debug("Капитал: отказ (%s)", cap_reason)
                 return None
 
-        can_open = self._risk.can_open_exit(notional) if str(risk_priority) == "exit" else self._risk.can_open(notional)
+        can_open = (
+            self._risk.can_open_exit(notional, exchange_id=exchange_id, symbol=symbol)
+            if str(risk_priority) == "exit"
+            else self._risk.can_open(notional, exchange_id=exchange_id, symbol=symbol)
+        )
         if not can_open:
             if self._paper_analytics is not None:
                 self._paper_analytics.on_reject_risk()
@@ -565,7 +569,7 @@ class OrderExecutor:
             now = time.monotonic()
 
             if not order_book:
-                self._risk.register(oid, notional)
+                self._risk.register(oid, notional, exchange_id=exchange_id, symbol=symbol)
                 log.info(
                     "PAPER limit %s %s %s amount=%s price=%s id=%s",
                     side,
@@ -613,7 +617,7 @@ class OrderExecutor:
                 status = "open"
 
             if open_notional > 1e-12:
-                self._risk.register(oid, open_notional)
+                self._risk.register(oid, open_notional, exchange_id=exchange_id, symbol=symbol)
 
             log.info(
                 "PAPER limit %s %s %s req=%s price=%s filled=%s remaining=%s avg=%s id=%s status=%s",
@@ -658,7 +662,7 @@ class OrderExecutor:
         order = await ex.create_order(symbol, "limit", side, amount_p, price_p, params)
         oid = str(order.get("id", ""))
         if oid:
-            self._risk.register(oid, amount_p * price_p)
+            self._risk.register(oid, amount_p * price_p, exchange_id=exchange_id, symbol=symbol)
         log.info("LIVE limit id=%s %s %s @ %s", oid, side, symbol, price_p)
         return order
 
