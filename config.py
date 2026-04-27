@@ -607,8 +607,10 @@ def load_settings() -> Settings:
         at_early_stop_min_age = max(at_early_stop_min_age, 60.0)
         # Mid-phase invalidation: если после раннего окна позиция в заметном минусе и стакан/спред ухудшился —
         # лучше выйти, чем держать до HARD.
-        at_mid_stop_start = max(at_mid_stop_start, 300.0)
-        at_mid_stop_loss_raw = max(at_mid_stop_loss_raw, 30.0)
+        # Делаем MID_STOP менее "нервным" по времени (не режем ранний шум),
+        # но чуть более чувствительным по величине убытка, чтобы раньше отрезать затяжной минус.
+        at_mid_stop_start = max(at_mid_stop_start, 600.0)
+        at_mid_stop_loss_raw = max(at_mid_stop_loss_raw, 24.0)
         at_mid_stop_thin = True
         at_mid_stop_spread_atr_m = max(at_mid_stop_spread_atr_m, 0.35)
         # Мягкий MAX_HOLD: не закрывать по таймеру, пока по стакану полный выход ещё «под TP»; потолок по возрасту — чтобы не ждать вечно.
