@@ -43,8 +43,15 @@ class RiskManager:
             return False
         if notional > self.limits.max_notional_per_order:
             return False
-        if len(self._open) >= self.limits.max_open_orders:
+        # Проверяем суммарный notional в приоритете перед счётчиком ордеров
+        total = self._total_open_notional()
+        if total + notional > self.limits.max_total_notional_open + 1e-9:
             return False
+        # Счётчик ордеров — мягкое ограничение: блокируем только если notional тоже близок к лимиту
+        if len(self._open) >= self.limits.max_open_orders:
+            # Разрешаем если используется менее 90% от max_total_notional_open
+            if total >= self.limits.max_total_notional_open * 0.9:
+                return False
         if (
             symbol
             and self.limits.max_open_orders_per_symbol is not None
@@ -58,9 +65,6 @@ class RiskManager:
             and self.limits.max_open_orders_per_exchange > 0
             and self._count_open_exchange(exchange_id) >= int(self.limits.max_open_orders_per_exchange)
         ):
-            return False
-        total = self._total_open_notional()
-        if total + notional > self.limits.max_total_notional_open + 1e-9:
             return False
         return True
 

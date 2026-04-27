@@ -1951,13 +1951,22 @@ class ScalpAutoTrader:
         if sig.side == "buy":
             # Paper debug mode: для демонстрации полного цикла (fill → exit) можно
             # выставлять лимитку "через спред" (рыночно-исполняемая).
+            # ВНИМАНИЕ: это нереалистично для live — используйте только для тестирования логики выходов.
             if self._s.paper and bool(getattr(self._s, "auto_trade_paper_cross_spread", False)):
                 price = q.ask
+                if self._entry_skip_log_ok("cross_spread_warn", exchange_id, q.symbol, now_mono, throttle_s=300.0):
+                    self._log.warning(
+                        "auto_trade: PAPER_CROSS_SPREAD=true — лимитки исполняются немедленно (нереалистично для live)"
+                    )
             else:
                 price = q.bid
         else:
             if self._s.paper and bool(getattr(self._s, "auto_trade_paper_cross_spread", False)):
                 price = q.bid
+                if self._entry_skip_log_ok("cross_spread_warn", exchange_id, q.symbol, now_mono, throttle_s=300.0):
+                    self._log.warning(
+                        "auto_trade: PAPER_CROSS_SPREAD=true — лимитки исполняются немедленно (нереалистично для live)"
+                    )
             else:
                 price = q.ask
         if price <= 0:
