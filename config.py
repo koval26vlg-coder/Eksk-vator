@@ -309,6 +309,10 @@ def load_settings() -> Settings:
         "yes",
         "on",
     )
+    # "Единственный лимит = депозит": если задан — ограничиваем только total-notional.
+    # Это отключает "удушение" по max_open_orders и позволяет выходам (exit) нормально проходить.
+    _raw_deposit = os.getenv("CAPITAL_DEPOSIT_QUOTE", "").strip()
+    capital_deposit_quote = float(_raw_deposit) if _raw_deposit else 0.0
     auto_trade = os.getenv("AUTO_TRADE", "false").lower() in ("1", "true", "yes", "on")
     auto_trade_profile = os.getenv("AUTO_TRADE_PROFILE", "").strip().lower()
     auto_trade_notional = float(os.getenv("AUTO_TRADE_NOTIONAL", "50"))
@@ -704,13 +708,20 @@ def load_settings() -> Settings:
             risk_total = max(500.0, float(risk_max_orders) * auto_trade_notional)
         else:
             risk_total = 500.0
+
+    deposit_mode = capital_deposit_quote > 1e-9
+    if deposit_mode:
+        # Только депозит как бюджет: total-notional = депозит; слоты поднимаем высоко.
+        risk_total = float(capital_deposit_quote)
+        risk_per_order = max(float(risk_per_order), float(capital_deposit_quote))
+        risk_max_orders = max(int(risk_max_orders), 10_000)
     # Скальпинг + авто: классический .env с RISK_MAX_OPEN_ORDERS=5 даёт open=5/5 при 2×5 потоках —
     # поднимаем пол до бирж×пар и суммарного номинала (если не RISK_STRICT_RISK_LIMITS=true).
-    if strategy == "scalping" and auto_trade and not risk_strict_limits:
+    if strategy == "scalping" and auto_trade and not risk_strict_limits and not deposit_mode:
         streams = len(ex_list) * len(sym_list)
         risk_max_orders = max(risk_max_orders, streams)
         risk_total = max(risk_total, float(risk_max_orders) * auto_trade_notional)
-    if strategy == "scalping" and auto_trade and auto_trade_max_open is not None:
+    if strategy == "scalping" and auto_trade and auto_trade_max_open is not None and not deposit_mode:
         if auto_trade_max_open < 1:
             raise ValueError("AUTO_TRADE_MAX_OPEN_ORDERS должен быть >= 1")
         risk_max_orders = min(risk_max_orders, auto_trade_max_open)
