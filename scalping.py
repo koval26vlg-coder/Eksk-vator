@@ -212,6 +212,7 @@ class ScalpingFilteredMomentum:
 class _RevState:
     ema: float | None = None
     armed: bool = True
+    prev_ema: float | None = None  # Для детекции тренда
 
 
 @dataclass
@@ -243,8 +244,21 @@ class ScalpingMeanReversion:
             st.ema = mid
             return None
 
+        # Сохраняем предыдущую EMA для детекции тренда
+        if st.prev_ema is None:
+            st.prev_ema = st.ema
+
+        prev_ema = st.prev_ema
         st.ema = self.ema_alpha * mid + (1.0 - self.ema_alpha) * st.ema
         dev_bps = (mid / st.ema - 1.0) * 10_000.0
+
+        # Детектор тренда: если EMA растет/падает более чем на deviation_bps/2, это тренд
+        ema_slope_bps = (st.ema / prev_ema - 1.0) * 10_000.0 if prev_ema > 0 else 0.0
+        trend_threshold = self.deviation_bps * 0.5
+        in_uptrend = ema_slope_bps > trend_threshold
+        in_downtrend = ema_slope_bps < -trend_threshold
+
+        st.prev_ema = st.ema
 
         if not st.armed:
             if abs(dev_bps) < self.reentry_bps:
@@ -252,6 +266,9 @@ class ScalpingMeanReversion:
             return None
 
         if dev_bps >= self.deviation_bps:
+            # Не фейдим восходящий тренд
+            if in_uptrend:
+                return None
             st.armed = False
             return ScalpSignal(
                 side="sell",
@@ -259,6 +276,9 @@ class ScalpingMeanReversion:
                 impulse_bps=abs(dev_bps),
             )
         if dev_bps <= -self.deviation_bps:
+            # Не фейдим нисходящий тренд
+            if in_downtrend:
+                return None
             st.armed = False
             return ScalpSignal(
                 side="buy",

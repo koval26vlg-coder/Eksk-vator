@@ -167,6 +167,17 @@ class ScalpingTAConservative(ScalpingTAOhlcv):
                 detail=f"TA cons: LONG у lower BB (|Δ|={abs(d_lower_bps):.1f}≤{near:.0f} bps), RSI={rsi:.1f}",
                 impulse_bps=float(imp),
             )
+        if rsi >= hi_th and abs(d_upper_bps) <= near:
+            imp = max(
+                impulse_bps_mid_to_ref(mid, mid_bb) or 0.0,
+                abs(d_upper_bps),
+                5.0,
+            )
+            return ScalpSignal(
+                side="sell",
+                detail=f"TA cons: SHORT у upper BB (|Δ|={abs(d_upper_bps):.1f}≤{near:.0f} bps), RSI={rsi:.1f}",
+                impulse_bps=float(imp),
+            )
         return None
 
     def on_quote(self, q: Quote, order_book: dict | None = None) -> ScalpSignal | None:
@@ -357,15 +368,24 @@ class ScalpingTARegime(ScalpingTAOhlcv):
             return None
         sides = {s.side for s, _ in cands}
         if len(sides) > 1:
-            log.debug(
-                "TA regime best_signal: конфликт сторон (%s) — пропуск",
-                sides,
+            # Конфликт сторон: выбираем сигнал с максимальным impulse_bps (сильнейший)
+            best_sig, best_mode = max(
+                cands,
+                key=lambda x: (x[0].impulse_bps, _BEST_SIGNAL_PRIO[x[1]]),
             )
-            return None
-        best_sig, best_mode = max(
-            cands,
-            key=lambda x: (x[0].impulse_bps, _BEST_SIGNAL_PRIO[x[1]]),
-        )
+            log.info(
+                "TA regime best_signal: конфликт сторон (%s) — выбран сильнейший %s %s (impulse=%.1f bps)",
+                sides,
+                best_mode,
+                best_sig.side,
+                best_sig.impulse_bps or 0.0,
+            )
+        else:
+            # Согласованные стороны: выбираем лучший по impulse и приоритету
+            best_sig, best_mode = max(
+                cands,
+                key=lambda x: (x[0].impulse_bps, _BEST_SIGNAL_PRIO[x[1]]),
+            )
         return self._emit_signal(
             q,
             ohlcv,
